@@ -15,6 +15,7 @@ FILES = [
     "server.js",
     "presets/china-radio.m3u",
     "presets/fm-radio.m3u",
+    "presets/qingting-radio.m3u",
     "public/index.html",
     "public/style.css",
     "public/app.js",

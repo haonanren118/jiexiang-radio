@@ -184,8 +184,8 @@ function seedFmOverridesFromStations() {
  * 后台执行，不阻塞同步返回；健康缓存 12h 内复用，避免每日重复探测。
  */
 async function repairFmStreams() {
-  const sid = fmSrcId();
-  const list = db.stations.filter((s) => s.sourceId === sid);
+  const sids = [fmSrcId(), qingtingSrcId()];
+  const list = db.stations.filter((s) => sids.includes(s.sourceId));
   if (!list.length) return;
   let checked = 0, dead = 0, fixed = 0;
   for (let i = 0; i < list.length; i += FM_REPAIR_CONC) {
@@ -245,6 +245,40 @@ const FM_CATEGORIES = [
 
 function fmSrcId() {
   return idOf('src', 'fm-hacks-tools');
+}
+
+/* ------------------------------------------------------------------ *
+ * 蜻蜓FM / 企鹊台(qtfm.cn) 内置订阅源
+ *
+ * 与 china-radio.m3u 一样作为「本地预置」内置源加载：presets/qingting-radio.m3u
+ * 里是 NAS 实际播放网络实测可放的直链 lhttp.qtfm.cn/live/<id>/64k.mp3。
+ * 由于蜻蜓FM 完整目录在其 App API 后、radio-browser 仅收录少量，这里是一份
+ * 经 NAS 实测的精选集（约 17 个），后续可随时往 m3u 里补台。
+ * ------------------------------------------------------------------ */
+const QINGTING_SOURCE_NAME = '蜻蜓FM 电台（内置）';
+const QINGTING_FILE = 'qingting-radio.m3u';
+
+function qingtingSrcId() {
+  return idOf('src', 'preset:' + QINGTING_FILE);
+}
+
+/** 首次启动/每次启动确保内置 蜻蜓FM 订阅源存在（已存在则跳过） */
+function ensureQingtingSource() {
+  const id = qingtingSrcId();
+  if (!db.sources.some((s) => s.id === id)) {
+    db.sources.push({
+      id,
+      name: QINGTING_SOURCE_NAME,
+      url: 'file://presets/' + QINGTING_FILE,
+      local: QINGTING_FILE,
+      builtin: true,
+      enabled: true,
+      count: 0,
+      lastLoad: '',
+      error: ''
+    });
+  }
+  return db.sources.find((s) => s.id === id);
 }
 
 /** 首次启动时把内置的国内电台列表作为默认订阅源放进去 */
@@ -1357,6 +1391,10 @@ loadFmAux(); // 载入按名缓存的替代源与健康状态
 const fmSrc = ensureFmSource();
 loadFmRadio(fmSrc).then(() => { seedFmOverridesFromStations(); saveDB(); repairFmStreams(); log('fm radio seeded'); });
 scheduleFmSync();
+
+/* 内置 蜻蜓FM 源：作为本地预置订阅源加载（NAS 实测可放的 qtfm 直链） */
+const qtSrc = ensureQingtingSource();
+loadSource(qtSrc).then(() => { saveDB(); log('qingting radio seeded: %d stations', qtSrc.count); });
 
 server.listen(PORT, '0.0.0.0', () => {
   log('jiexiang-radio listening on %d, data=%s', PORT, DATA_FILE);

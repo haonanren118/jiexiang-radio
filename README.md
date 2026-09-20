@@ -31,6 +31,7 @@
 - 🌙 深色模式跟随系统
 - 💾 数据持久化到 `/data/sources.json`，容器重建不丢
 - 📻 **内置 hacks.tools FM 电台（每日同步）**：自动按分类抓取并合并约 600 个国内电台，**每日同步更新**
+- 🐝 **内置 蜻蜓FM 电台源**：一份在 NAS 播放网络实测可放的 蜻蜓FM / 企鹊台(qtfm.cn) 直链精选集（`presets/qingting-radio.m3u`，开箱即听，可自己往里加台）
 - 🛠️ **同步后自动体检**：每次同步完逐电台探测连通性，**失效的自动换成可用的 蜻蜓FM / 企鹊台(qtfm.cn) 替代源**，按电台名持久化，重启不丢
 
 ---
@@ -149,6 +150,7 @@ jiexiang-radio/
 - **FM 电台数据**：[hacks.tools / iptv.hacks.tools](https://iptv.hacks.tools) 每日更新的分类 M3U 源——本项目将其内置为「hacks.tools FM 电台（每日同步）」，并每日自动同步。
 - **电台台标（Logo）**：[fanmingming/live](https://github.com/fanmingming/live) 开源台标库——经 ghproxy 代理在 NAS 取用，修复了原 `huangsuming.codeberg.page` 整站删除导致的台标缺失。
 - **全球电台索引**：[radio-browser](https://www.radio-browser.info/)——「发现」标签页的数据源，本项目在自动替换失效源时也会向它查询 蜻蜓FM / 企鹊台(qtfm.cn) 替代流。
+- **蜻蜓FM / 企鹊台(qtfm.cn) 直链**：本项目内置的「蜻蜓FM 电台（内置）」订阅源即采用其 `lhttp.qtfm.cn/live/<id>/64k.mp3` 直链（已在 NAS 播放网络实测可放）。
 - **HLS 播放**：[hls.js](https://github.com/video-dev/hls.js)（已内置 `public/vendor/`，构建无需联网）。
 - **电台版权**：各电台的节目版权归原广播机构所有（央广 CNR/CMG、各省电台等），本项目仅作播放聚合，不存储、不转售任何节目内容。
 
