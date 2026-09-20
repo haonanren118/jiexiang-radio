@@ -1,0 +1,14 @@
+{
+  "name": "jiexiang-radio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "能真正播放的在线电台：内置 radio-browser 全球电台 + 自定义多格式订阅源，服务端重写代理解决跨域/证书/防盗链",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

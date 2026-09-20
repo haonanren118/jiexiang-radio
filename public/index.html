@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>杰翔电台 · jiexiang-radio</title>
+<link rel="stylesheet" href="/style.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>" />
+</head>
+<body data-view="grid">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">📻</span>
+    <div>
+      <h1>杰翔电台</h1>
+      <p class="sub" id="stat">加载中…</p>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <button class="nav-item active" data-tab="home"><span class="nic">🏠</span>首页</button>
+    <button class="nav-item" data-tab="mine"><span class="nic">📺</span>我的电台</button>
+    <button class="nav-item" data-tab="fav"><span class="nic">♡</span>收藏</button>
+    <button class="nav-item" data-tab="history"><span class="nic">🕘</span>足迹</button>
+  </nav>
+
+  <div class="topright">
+    <button class="icon-btn" data-tab="search" title="搜索电台">🔍</button>
+    <div class="lang" id="lang-wrap">
+      <button type="button" class="lang-btn" id="btn-lang" aria-haspopup="menu" aria-expanded="false" title="切换语言">🌐 中文 <span class="caret">▾</span></button>
+      <div class="lang-menu" id="lang-menu" role="menu" hidden>
+        <button type="button" data-lang="zh-CN" role="menuitem">简体中文</button>
+        <button type="button" data-lang="en" role="menuitem" disabled>English · 敬请期待</button>
+      </div>
+    </div>
+    <button class="icon-btn" id="btn-theme" title="切换主题"></button>
+    <button class="icon-btn" data-tab="settings" title="订阅源设置">⚙</button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ 首页 ============ -->
+  <section id="pane-home" class="pane active">
+    <div class="hero-head">
+      <h2 id="home-title">聆听世界，音乐无界</h2>
+      <button class="icon-btn" id="btn-view" title="切换视图"></button>
+    </div>
+
+    <div class="hero-grid">
+      <button class="hero-card primary" data-tab="random" id="hero-card">
+        <span class="hibadge">↻</span>
+        <strong id="hero-label">随机发现</strong>
+        <span id="hero-sub">探索新电台</span>
+      </button>
+      <button class="hero-card" data-tab="search">
+        <span class="hicon c-teal">🔍</span>
+        <strong>搜索</strong>
+        <span>找到喜欢的</span>
+      </button>
+      <button class="hero-card" data-tab="history">
+        <span class="hicon c-amber">🕘</span>
+        <strong>足迹</strong>
+        <span>查看访问记录</span>
+      </button>
+      <button class="hero-card" data-tab="fav">
+        <span class="hicon c-rose">♥</span>
+        <strong>收藏</strong>
+        <span>收藏的电台</span>
+      </button>
+    </div>
+
+    <section class="card">
+      <div class="card-head">
+        <h3>我的电台</h3>
+        <div class="head-tools"><span class="count-pill" id="home-mine-count"></span></div>
+      </div>
+      <div id="home-mine" class="grid home-grid"></div>
+      <div class="empty" id="home-empty" hidden>
+        还没有电台。到「我的电台」页面添加订阅源，或直接手动添加单个电台。
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h3>最近收听</h3>
+        <button class="link-btn" data-tab="history">全部足迹 →</button>
+      </div>
+      <div id="home-hist" class="hist-strip"></div>
+      <div class="empty" id="home-hist-empty" hidden>还没有收听记录。</div>
+    </section>
+  </section>
+
+  <!-- ============ 我的电台 ============ -->
+  <section id="pane-mine" class="pane">
+    <section class="card">
+      <div class="card-head">
+        <h3>我的电台</h3>
+        <div class="head-tools"><span class="count-pill" id="mine-count"></span></div>
+      </div>
+
+      <div class="src-block">
+        <div class="block-title">🔗 M3U 订阅源</div>
+        <div class="toolbar tight">
+          <input id="q-src" type="search" placeholder="搜索订阅源…" autocomplete="off" />
+        </div>
+        <div id="src-list" class="list"></div>
+        <form class="formrow" data-role="source-form">
+          <input name="name" placeholder="源名称（可留空）" />
+          <input name="url" placeholder="https://…/index.m3u" required />
+          <button type="submit">添加源</button>
+        </form>
+      </div>
+
+      <div class="src-block">
+        <div class="block-title">⊕ 手动添加 / 粘贴导入</div>
+        <form class="formrow" data-role="station-form">
+          <input name="name" placeholder="电台名称" />
+          <input name="url" placeholder="流地址 https://….mp3/.m3u8" required />
+          <button type="submit">添加</button>
+        </form>
+        <textarea rows="3" data-role="paste"
+          placeholder="或直接粘贴 M3U 内容（支持 #EXTINF 格式），然后点「解析导入」"></textarea>
+        <div class="formfoot">
+          <button type="button" class="ghost" data-role="import">解析导入</button>
+          <button type="button" class="ghost" data-role="export">⬇ 导出 M3U</button>
+          <button type="button" class="danger-text" data-role="clear">清空</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <input id="q-mine" type="search" placeholder="搜索电台名称 / 分组…" autocomplete="off" />
+      </div>
+    </section>
+
+    <div class="catbar" id="cat-bar">
+      <div class="cat-chips" id="cat-chips"></div>
+    </div>
+
+    <div id="mine-list" class="grid st-grid"></div>
+    <div id="list-mine" class="list st-list"></div>
+    <div class="empty" id="mine-empty" hidden>
+      还没有电台。上面添加一个订阅源，或手动添加单个电台。
+    </div>
+  </section>
+
+  <!-- ============ 收藏 ============ -->
+  <section id="pane-fav" class="pane">
+    <section class="card">
+      <div class="card-head">
+        <h3>♡ 我的收藏</h3>
+        <div class="head-tools"><span class="count-pill" id="fav-count"></span></div>
+      </div>
+      <p class="hint">点电台卡片上的爱心即可收藏，收藏记录保存在本机浏览器。</p>
+    </section>
+    <div id="fav-list" class="grid st-grid"></div>
+    <div id="list-fav" class="list st-list"></div>
+    <div class="empty" id="fav-empty">还没有收藏任何电台。</div>
+  </section>
+
+  <!-- ============ 足迹 ============ -->
+  <section id="pane-history" class="pane">
+    <section class="card">
+      <div class="card-head">
+        <h3>🕘 收听足迹</h3>
+        <div class="head-tools">
+          <span class="count-pill" id="hist-count"></span>
+          <button type="button" id="btn-clear-hist" class="mini-btn danger">清空记录</button>
+        </div>
+      </div>
+    </section>
+    <div id="hist-list" class="list"></div>
+    <div class="empty" id="hist-empty">还没有收听记录。</div>
+  </section>
+
+  <!-- ============ 发现 ============ -->
+  <section id="pane-discover" class="pane">
+    <section class="card">
+      <div class="card-head">
+        <h3>🌍 发现电台</h3>
+        <div class="head-tools"><span class="count-pill" id="disc-count"></span></div>
+      </div>
+      <p class="hint">数据来自 radio-browser（与 global-radio 同源），多个官方镜像自动容灾。</p>
+      <div class="searchbar">
+        <input id="q-disc" type="search" placeholder="搜索全球电台名（留空按热度）" autocomplete="off" />
+        <select id="country">
+          <option value="">按国家/地区</option>
+          <option value="CN" selected>中国 CN</option>
+          <option value="TW">中国台湾 TW</option>
+          <option value="HK">中国香港 HK</option>
+          <option value="JP">日本 JP</option>
+          <option value="KR">韩国 KR</option>
+          <option value="US">美国 US</option>
+          <option value="GB">英国 GB</option>
+          <option value="SG">新加坡 SG</option>
+        </select>
+        <button id="btn-disc">搜索</button>
+      </div>
+    </section>
+    <div id="disc-list" class="grid st-grid"></div>
+    <div id="list-disc" class="list st-list"></div>
+    <div class="empty" id="disc-empty">输入关键词或选择国家/地区后点搜索。</div>
+  </section>
+
+  <!-- ============ 订阅源设置 ============ -->
+  <section id="pane-sources" class="pane">
+    <section class="card">
+      <div class="card-head">
+        <h3>⚙ 订阅源管理</h3>
+      </div>
+      <p class="hint">粘贴内容或填写 URL 都会自动识别格式，无需手动选择：</p>
+      <div class="chipline">
+        <span class="chip">M3U</span>
+        <span class="chip">M3U8</span>
+        <span class="chip">PLS</span>
+        <span class="chip">ASX</span>
+        <span class="chip">XSPF</span>
+        <span class="chip">JSON</span>
+        <span class="chip">纯文本每行一条</span>
+      </div>
+      <div class="src-block">
+        <div class="block-title">🔗 添加订阅源</div>
+        <form class="formrow" data-role="source-form">
+          <input name="name" placeholder="源名称（可留空）" />
+          <input name="url" placeholder="https://…/index.m3u" required />
+          <button type="submit">添加源</button>
+        </form>
+        <p class="hint tight">添加后会立刻拉取一次，解析出的电台自动进入「我的电台」。</p>
+      </div>
+
+      <div class="src-block">
+        <div class="block-title">⊕ 手动添加单个电台 / 粘贴导入</div>
+        <form class="formrow" data-role="station-form">
+          <input name="name" placeholder="电台名称" />
+          <input name="url" placeholder="流地址 https://….mp3/.m3u8" required />
+          <button type="submit">添加</button>
+        </form>
+        <textarea rows="3" data-role="paste"
+          placeholder="或直接粘贴 M3U 内容（支持 #EXTINF 格式），然后点「解析导入」"></textarea>
+        <div class="formfoot">
+          <button type="button" class="ghost" data-role="import">解析导入</button>
+          <button type="button" class="ghost" data-role="export">⬇ 导出 M3U</button>
+          <button type="button" class="danger-text" data-role="clear">清空全部电台</button>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <h3>当前订阅源</h3>
+        <div class="head-tools"><span class="count-pill" id="src-count"></span></div>
+      </div>
+      <div id="src-list-full" class="list"></div>
+      <div class="empty" id="src-empty" hidden>还没有订阅源。</div>
+    </section>
+  </section>
+
+</main>
+
+<!-- 播放器 -->
+<footer class="player" id="player">
+  <div class="np">
+    <span class="np-art" id="np-art"></span>
+    <div class="np-txt">
+      <strong id="np-name">未在播放</strong>
+      <span id="np-meta">选一个电台开始收听</span>
+      <span class="np-status" id="np-sub"></span>
+    </div>
+  </div>
+  <div class="ctrls">
+    <button id="btn-play" title="播放/暂停">▶</button>
+    <input id="vol" type="range" min="0" max="100" value="80" title="音量" />
+  </div>
+</footer>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/vendor/hls.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

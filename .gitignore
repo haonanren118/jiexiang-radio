@@ -1,0 +1,18 @@
+node_modules/
+data/
+.workbuddy/
+*.log
+.DS_Store
+
+# 开发/调试用的临时脚本与产物（非项目运行所需）
+*.py
+!deploy.py
+shots/
+*.png
+_sources.json
+rb_alt.json
+probe_dom.js
+shot_final.js
+shot_ui.js
+test_add.js
+test_play.js
