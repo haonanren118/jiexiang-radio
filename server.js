@@ -95,6 +95,8 @@ const FM_HEALTH_FILE = path.join(DATA_DIR, 'fm-health.json');      // url  -> {o
 const PROBE_TIMEOUT = Math.min(parseInt(process.env.FM_PROBE_TIMEOUT || '12000', 10), 20000);
 const FM_REPAIR_CONC = Math.max(parseInt(process.env.FM_REPAIR_CONCURRENCY || '8', 10), 1);
 const FM_HEALTH_TTL = parseInt(process.env.FM_HEALTH_TTL || '43200000', 10); // 12h
+/* 查不到替代源而标记为 NONE 的电台，隔多久再查一次（radio-browser 会新增条目） */
+const FM_NONE_RETRY = parseInt(process.env.FM_NONE_RETRY_MS || String(3 * 86400000), 10); // 3 天
 
 let fmOverrides = {}; // name -> 替代 url 或 'NONE'（已查无可用）
 let fmHealth = {};    // url  -> { ok:boolean, ts:number }
@@ -211,10 +213,13 @@ async function repairFmStreams() {
           return;
         }
       }
-      // 2) 未查过：去 radio-browser 找 蜻蜓FM 替代
-      if (!cached) {
+      // 2) 未查过、或上次判定「无替代源」已过期：去 radio-browser 找 蜻蜓FM 替代
+      const noneKey = 'none:' + st.name;
+      const noneTs = (fmHealth[noneKey] && fmHealth[noneKey].ts) || 0;
+      if (!cached || (cached === 'NONE' && Date.now() - noneTs > FM_NONE_RETRY)) {
         const rep = await findQtfmReplacement(st.name);
         fmOverrides[st.name] = rep || 'NONE';
+        fmHealth[noneKey] = { ok: false, ts: Date.now() };
         if (rep && rep !== url) {
           st.url = rep; fixed++;
           fmHealth[rep] = { ok: true, ts: Date.now() };
@@ -224,7 +229,8 @@ async function repairFmStreams() {
   }
   if (fixed) saveDB();
   saveFmAux();
-  log('fm repair done: checked=%d dead=%d fixed=%d', checked, dead, fixed);
+  const noAlt = Object.keys(fmOverrides).filter((k) => fmOverrides[k] === 'NONE').length;
+  log('fm repair done: checked=%d dead=%d fixed=%d noAlt=%d', checked, dead, fixed, noAlt);
 }
 /* 本地烘焙台标：沙箱把台标图下载到 presets/logos/，manifest 记录
  * canonical 运行期 URL -> 本地文件名。命中即改写为站内 /logo/ 路径，
@@ -932,6 +938,7 @@ async function loadFmRadio(src) {
       }
       src.count = items.length;
       src.lastLoad = new Date().toISOString();
+      src.stale = false; // 实时源拉到数据，数据是新鲜的
       src.error = okCats + '/' + FM_CATEGORIES.length + ' 分类已同步'
         + (failCats ? ('，' + failCats + ' 个暂无数据') : '');
       log('fm radio -> %d stations (%d cats ok, %d fail)', items.length, okCats, failCats);
@@ -967,6 +974,7 @@ async function loadFmRadio(src) {
       }
       src.count = n;
       src.lastLoad = new Date().toISOString();
+      src.stale = true; // 只是快照兜底：等实时源恢复后要尽快重试，别等到 24h
       src.error = '实时源暂不可达，已用离线快照（' + n + ' 个）';
       log('fm radio fallback snapshot -> %d', n);
       return n;
@@ -981,15 +989,40 @@ async function loadFmRadio(src) {
   }
 }
 
-/** 每日自动同步一次 hacks.tools FM 源（可用 FM_SYNC_HOURS 覆盖间隔，默认 24） */
+/**
+ * 每日自动同步一次 hacks.tools FM 源。
+ * 不是「从启动计时 24h」——那样每次重建/重启都会把同步时间往后推，
+ * 看起来就像"今天没更新"。改为每 FM_SYNC_CHECK_MINUTES 分钟检查一次
+ * 「数据实际年龄」，超过 FM_SYNC_HOURS 才真正同步：
+ *   - 重启不会推迟同步（过期即补）
+ *   - 同步时间点跟随真实 lastLoad，界面上永远能看到最新的同步时间
+ */
 function scheduleFmSync() {
   const hours = Math.max(parseInt(process.env.FM_SYNC_HOURS || '24', 10), 1);
-  const ms = hours * 3600 * 1000;
-  setInterval(() => {
+  const intervalMs = hours * 3600 * 1000;
+  const checkMs = Math.max(parseInt(process.env.FM_SYNC_CHECK_MINUTES || '15', 10), 1) * 60 * 1000;
+  const STALE_RETRY_GAP = 2 * 3600 * 1000; // 快照兜底后最多每 2h 重试实时源
+  let running = false;
+  let staleRetryAt = 0;
+  const tick = () => {
     const s = db.sources.find((x) => x.id === fmSrcId());
-    if (s) loadFmRadio(s).then(() => { seedFmOverridesFromStations(); saveDB(); repairFmStreams(); });
-  }, ms);
-  log('fm sync scheduled every %d h', hours);
+    if (!s || s.enabled === false) return;
+    const last = Date.parse(s.lastLoad || '') || 0;
+    const ageMs = Date.now() - last;
+    const overdue = ageMs >= intervalMs;
+    const staleRetry = s.stale === true && Date.now() >= staleRetryAt;
+    if (!overdue && !staleRetry) return;     // 还没到期
+    if (running) return;                     // 上一轮还没跑完
+    running = true;
+    if (s.stale === true) staleRetryAt = Date.now() + STALE_RETRY_GAP;
+    log('fm sync due (lastLoad=%s, age=%.1fh), syncing...', s.lastLoad || 'never', ageMs / 3600000);
+    loadFmRadio(s)
+      .then(() => { seedFmOverridesFromStations(); saveDB(); repairFmStreams(); })
+      .catch((e) => log('fm sync error: %s', (e && e.message) || e))
+      .then(() => { running = false; });
+  };
+  setInterval(tick, checkMs);
+  log('fm sync scheduled every %d h (check every %d min, catch-up on restart)', hours, checkMs / 60000);
 }
 
 /* ------------------------------------------------------------------ *

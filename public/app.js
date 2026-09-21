@@ -41,6 +41,16 @@
     });
   }
 
+  /* 后端存的是 UTC ISO 字符串，这里转成本机时区显示（否则会看着像"昨天没更新"） */
+  function fmtTs(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).replace('T', ' ').slice(0, 16);
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
   var toastTimer = null;
   function toast(msg, bad) {
     var el = $('toast');
@@ -440,7 +450,7 @@
       '<span class="url">' + esc(src.url) + '</span>' +
       '<span class="rmeta-sub">' +
       (src.count ? src.count + ' 个电台' : (src.error ? '<b class="err">' + esc(src.error) + '</b>' : '尚未加载')) +
-      (src.lastLoad ? ' · ' + esc(src.lastLoad.replace('T', ' ').slice(0, 16)) : '') +
+      (src.lastLoad ? ' · ' + esc(fmtTs(src.lastLoad)) : '') +
       '</span></div>' +
       '<div class="sactions">' +
       '<button data-a="refresh" class="icon-btn" title="重新拉取">' + ico('refresh') + '</button>' +
