@@ -16,3 +16,5 @@ shot_final.js
 shot_ui.js
 test_add.js
 test_play.js
+__pycache__/
+_verify_sources.json

@@ -16,6 +16,8 @@ FILES = [
     "presets/china-radio.m3u",
     "presets/fm-radio.m3u",
     "presets/qingting-radio.m3u",
+    "presets/jiexiang-radio.m3u",
+    "presets/logo-index.json",
     "public/index.html",
     "public/style.css",
     "public/app.js",
@@ -44,7 +46,7 @@ def run(c, cmd, timeout=600, show=True):
 def main():
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(HOST, username=USER, password=PWD, timeout=20)
+    c.connect(HOST, username=USER, password=PWD, timeout=20, look_for_keys=False, allow_agent=False)
     sftp = c.open_sftp()
 
     def mkdirs(p):

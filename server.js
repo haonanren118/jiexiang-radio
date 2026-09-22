@@ -119,37 +119,85 @@ function resolveFmUrl(name, url) {
   return u;
 }
 
-/** 探测一个流是否连通（NAS 播放网络）。2xx 即视为可用；支持 3xx 重定向跟随 */
-function probeStream(url, depth) {
+/**
+ * 探测一个流是否真的可放（NAS 播放网络）。支持 3xx 重定向跟随。
+ *
+ * 只判状态码是不够的：喜马拉雅等下架/未开播的电台会返回
+ * **HTTP 200 + {"ret":2011,"msg":"电台流获取失败"}**，纯状态码判活会把这些
+ * 死流当成可用，导致「体检永远查不出问题、也永远修不掉」。因此这里要嗅探
+ * 响应体：
+ *   · JSON 错误体 / HTML 错误页      → 判死
+ *   · .m3u8 或 mpegurl 内容类型      → 必须以 #EXTM3U 开头，否则判死
+ *   · mp3/aac 等音频流               → 有响应字节（或 audio 类型）即判活
+ */
+/**
+ * 探测一个流是否真的可放（NAS 播放网络），并返回首字节延迟（latency，毫秒）。
+ * 支持 3xx 重定向跟随；延迟按「从发起请求到收到响应头」计（含 DNS/握手/首字节），
+ * 是排序「快慢」最直观的指标。
+ * 只判状态码不够（喜马拉雅下架台返回 HTTP 200 + JSON 错误体），所以仍嗅探响应体。
+ */
+function probeCore(url, depth, startTime) {
   depth = depth || 0;
+  startTime = startTime || Date.now();
   return new Promise((resolve) => {
     let u;
-    try { u = new URL(url); } catch (e) { return resolve(false); }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve(false);
+    try { u = new URL(url); } catch (e) { return resolve({ ok: false, latency: null }); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve({ ok: false, latency: null });
     const mod = u.protocol === 'https:' ? https : http;
     let done = false;
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const finish = (ok, lat) => { if (!done) { done = true; resolve({ ok, latency: lat }); } };
     const req = mod.request(u, {
       method: 'GET',
       headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity', 'Range': 'bytes=0-4095' },
       rejectUnauthorized: false,
       timeout: PROBE_TIMEOUT
     }, (res) => {
+      const ttfb = Date.now() - startTime;
       if ([301, 302, 303, 307, 308].indexOf(res.statusCode) >= 0 && res.headers.location && depth < 3) {
         res.resume();
-        let nu; try { nu = new URL(res.headers.location, u).href; } catch (e) { return finish(false); }
-        return probeStream(nu, depth + 1).then(finish);
+        let nu; try { nu = new URL(res.headers.location, u).href; } catch (e) { return finish(false, ttfb); }
+        return probeCore(nu, depth + 1, startTime).then((r) => finish(r.ok, r.latency));
       }
-      res.destroy();
-      finish(res.statusCode >= 200 && res.statusCode < 400);
+      if (!(res.statusCode >= 200 && res.statusCode < 400)) { res.destroy(); return finish(false, ttfb); }
+      const ctype = String(res.headers['content-type'] || '').toLowerCase();
+      const playlistLike = /\.m3u8(\?|$)/i.test(u.pathname + u.search) || /mpegurl|m3u/i.test(ctype);
+      const jsonLike = /json/i.test(ctype);
+      let buf = Buffer.alloc(0);
+      let settled = false;
+      const settle = (ok) => {
+        if (settled) return;
+        settled = true;
+        try { res.destroy(); } catch (e) { /* ignore */ }
+        finish(ok, ttfb);
+      };
+      const judge = () => {
+        const text = buf.toString('utf8').replace(/^\uFEFF/, '').trim();
+        if (jsonLike || text.charAt(0) === '{' || text.charAt(0) === '<') return settle(false); // 上游错误体 / HTML 页
+        if (playlistLike) return settle(text.indexOf('#EXTM3U') === 0);
+        return settle(buf.length > 0 || /audio|video|octet-stream/i.test(ctype));
+      };
+      res.on('data', (c) => { buf = Buffer.concat([buf, c]); if (buf.length >= 1024) judge(); });
+      res.on('end', judge);
+      res.on('close', judge);
+      res.on('error', () => settle(false));
     });
-    req.on('timeout', () => { try { req.destroy(); } catch (e) { /* ignore */ } finish(false); });
-    req.on('error', () => finish(false));
+    req.on('timeout', () => { try { req.destroy(); } catch (e) { /* ignore */ } finish(false, Date.now() - startTime); });
+    req.on('error', () => finish(false, Date.now() - startTime));
     req.end();
   });
 }
+/** 旧接口：只返回 bool（供 fallback 查找复用，保持调用方不变） */
+function probeStream(url, depth) { return probeCore(url, depth).then((r) => r.ok); }
+/** 新接口：返回 { ok, latency }（供源池测速排序） */
+function probeTimed(url, depth) { return probeCore(url, depth); }
 
-/** 按电台名去 radio-browser 找可用的 蜻蜓FM/qtfm 替代流；找到且在 NAS 实测可放才返回 */
+/**
+ * 按电台名去 radio-browser 找可用替代流；找到且在 NAS 实测可放才返回。
+ * 两轮：
+ *   1) 蜻蜓FM/qtfm 条目（优先，国内可达性最好）
+ *   2) 其它 http(s) 条目，但要求「归一化台名完全一致」才采纳
+ *      —— 放宽到 Qtfm 之外的图源是为了提高可补率，用严格同名守住「贴错台」的风险
+ */
 async function findQtfmReplacement(name) {
   const q = encodeURIComponent(name);
   // NAS 网络实测仅 de1 镜像可达，其余均 ENOTFOUND；只查 de1 避免无谓重试
@@ -160,13 +208,64 @@ async function findQtfmReplacement(name) {
       if (res.statusCode !== 200) { res.resume(); continue; }
       const buf = await readAll(res);
       const arr = JSON.parse(buf.toString('utf8'));
-      const cands = arr
-        .map((s) => s.url_resolved || s.url || '')
-        .filter((u) => /qtfm\.cn/i.test(u) || /qingting\.fm/i.test(u));
-      for (const cu of cands) {
+      const urls = arr.map((s) => s.url_resolved || s.url || '').filter((u) => /^https?:\/\//i.test(u));
+      // 第 1 轮：蜻蜓FM / 企鹊台
+      for (const cu of urls.filter((u) => /qtfm\.cn/i.test(u) || /qingting\.fm/i.test(u))) {
         if (await probeStream(cu)) return cu;
       }
+      // 第 2 轮：其余源，仅采纳与目标台名归一化后完全一致的条目
+      const want = normStationName(name);
+      if (want) {
+        for (const s of arr) {
+          const cu = s.url_resolved || s.url || '';
+          if (!/^https?:\/\//i.test(cu)) continue;
+          if (/qtfm\.cn/i.test(cu) || /qingting\.fm/i.test(cu)) continue;
+          if (normStationName(s.name || '') !== want) continue;
+          if (await probeStream(cu)) return cu;
+        }
+      }
     } catch (e) { /* try next mirror */ }
+  }
+  return null;
+}
+
+/** 按电台名在 喜马拉雅源 中找 HLS 直播直链替代；找到且 NAS 实测可放才返回 */
+let ximalayaMap = null;
+function normStationName(s) {
+  s = (s || '').replace(/\s+/g, '');
+  s = s.replace(/[（(][^）)]*[）)]/g, '');
+  // 去频率号 FM98.6 / 881 / 106.1MHz / 兆赫（与台标归一化保持一致，避免 FM 源带频率后缀对不上喜马拉雅同名台）
+  for (const p of [/FM\s*\d+(?:\.\d+)?/i, /\d+(?:\.\d+)?\s*MHz/i, /\d+(?:\.\d+)?\s*兆赫/i, /(?<![0-9A-Za-z])\d{2,4}(?![0-9A-Za-z])/]) {
+    s = s.replace(p, '');
+  }
+  let t = true;
+  while (t) {
+    t = false;
+    for (const suf of ['广播电视台', '人民广播电台', '广播电视', '广播电台', '电台', '广播', '频率', '之声', '之音']) {
+      if (s.length > suf.length + 1 && s.endsWith(suf)) { s = s.slice(0, -suf.length); t = true; }
+    }
+  }
+  return s;
+}
+function buildXimalayaMap() {
+  ximalayaMap = new Map();
+  for (const st of db.stations) {
+    if (st.sourceName !== JIEXIANG_SOURCE_NAME) continue;
+    if (!st.url || !/^https?:/i.test(st.url)) continue;
+    if (!ximalayaMap.has(st.name)) ximalayaMap.set(st.name, st.url);
+    const n = normStationName(st.name);
+    if (n && !ximalayaMap.has(n)) ximalayaMap.set(n, st.url);
+  }
+}
+async function findXimalayaReplacement(name) {
+  if (!ximalayaMap) buildXimalayaMap();
+  if (!ximalayaMap || ximalayaMap.size === 0) return null;
+  const cands = [];
+  if (ximalayaMap.has(name)) cands.push(ximalayaMap.get(name));
+  const n = normStationName(name);
+  if (n && ximalayaMap.has(n)) cands.push(ximalayaMap.get(n));
+  for (const cu of cands) {
+    if (cu && await probeStream(cu)) return cu;
   }
   return null;
 }
@@ -181,56 +280,135 @@ function seedFmOverridesFromStations() {
   }
 }
 
+/** 给死流找替代源：蜻蜓FM(qtfm) 优先；当前台不属于喜马拉雅源时，再退到喜马拉雅源 */
+async function findReplacement(name, sid) {
+  let rep = await findQtfmReplacement(name);
+  if (!rep && sid !== jiexiangSrcId()) rep = await findXimalayaReplacement(name);
+  return rep;
+}
+
 /**
- * 同步完成后全量体检：探测每个 FM 电台连通性，失效的自动换 蜻蜓FM 源。
- * 后台执行，不阻塞同步返回；健康缓存 12h 内复用，避免每日重复探测。
+ * 源池：把「同名电台在各订阅源的播放地址」聚合成一个候选池。
+ *
+ * 每台 station 自带 sources[]（含自己的地址 + 其它源里同名台的地址），点播时
+ * 由 refreshPool 探测每个源的通断与延迟，把最快可用源写入 st.url。
+ * 这样同名台在多个订阅源里重复出现也不影响「选最快源」，且天然兼容旧数据
+ * （旧 station 没有 sources 字段，这里会自动补上）。
  */
-async function repairFmStreams() {
-  const sids = [fmSrcId(), qingtingSrcId()];
-  const list = db.stations.filter((s) => sids.includes(s.sourceId));
+function enrichPools() {
+  const byNorm = new Map();
+  for (const st of db.stations) {
+    if (!st || !st.url || !/^https?:/i.test(st.url)) continue;
+    const n = normStationName(st.name);
+    if (!n) continue;
+    if (!byNorm.has(n)) byNorm.set(n, []);
+    byNorm.get(n).push(st);
+  }
+  for (const st of db.stations) {
+    if (!st || !st.url || !/^https?:/i.test(st.url)) continue;
+    const n = normStationName(st.name);
+    if (!n) continue;
+    const peers = (byNorm.get(n) || []).filter((x) => x !== st);
+    const urls = new Map(); // url -> from（来源名）
+    const add = (u, from) => { if (u && /^https?:/i.test(u) && !urls.has(u)) urls.set(u, from); };
+    add(st.url, st.sourceName || '主源');
+    for (const p of peers) add(p.url, p.sourceName || '同名源');
+    const existing = new Map((st.sources || []).map((s) => [s.url, s]));
+    st.sources = Array.from(urls.entries()).map(([u, from]) => {
+      const prev = existing.get(u);
+      if (prev) return prev;
+      return {
+        url: u,
+        type: isPlaylistByUrl(u) ? 'hls' : 'mp3',
+        from,
+        ok: null,        // 未知（待探测）
+        latency: null,   // 首字节延迟（毫秒）
+        dead: false,
+        checkedAt: 0,
+        note: ''
+      };
+    });
+    st.poolCount = st.sources.length;
+  }
+}
+
+/** 从某台源池里挑最快可用源；manualUrl（用户手动指定）优先 */
+function pickBest(st) {
+  const srcs = (st.sources || []).filter((s) => s.ok && !s.dead && /^https?:/i.test(s.url || ''));
+  if (!srcs.length) return null;
+  srcs.sort((a, b) => (a.latency == null ? 1e9 : a.latency) - (b.latency == null ? 1e9 : b.latency));
+  if (st.manualUrl) {
+    const m = srcs.find((s) => s.url === st.manualUrl);
+    if (m) return m.url;
+  }
+  return srcs[0].url;
+}
+
+/**
+ * 全源连通性体检 + 测速排序（取代原 repairStreams）。
+ * 覆盖所有订阅源电台：逐源探测通断、记录延迟，把最快可用源写入 st.url；
+ * 全部失效的电台再去 radio-browser / 喜马拉雅找替代源补进池。
+ * 后台执行不阻塞；健康缓存 12h 内复用，避免每日重复探测。
+ */
+async function refreshPool() {
+  enrichPools();
+  const list = db.stations.filter((s) => s.url && /^https?:/i.test(s.url));
   if (!list.length) return;
-  let checked = 0, dead = 0, fixed = 0;
+  let checked = 0, alive = 0, dead = 0, switched = 0, fallback = 0;
   for (let i = 0; i < list.length; i += FM_REPAIR_CONC) {
     const chunk = list.slice(i, i + FM_REPAIR_CONC);
     await Promise.all(chunk.map(async (st) => {
-      const url = st.url;
-      // 跳过无 URL 或元数据伪电台（hacks.tools 里混入了 "updateTime: ..." 之类的行）
-      if (!url || !/^https?:/i.test(url)) return;
-      if (/^updateTime/i.test(st.name || '')) return;
-      const h = fmHealth[url];
-      if (h && h.ok && (Date.now() - (h.ts || 0)) < FM_HEALTH_TTL) return; // 近期已验证可用
-      checked++;
-      const ok = await probeStream(url);
-      fmHealth[url] = { ok, ts: Date.now() };
-      if (ok) return;
-      dead++;
-      // 1) 已有按名缓存的替代源：实测仍可用就直接换
-      const cached = fmOverrides[st.name];
-      if (cached && cached !== 'NONE' && cached !== url) {
-        if (await probeStream(cached)) {
-          st.url = cached; fixed++;
-          fmHealth[cached] = { ok: true, ts: Date.now() };
-          return;
+      const srcs = st.sources || [];
+      if (!srcs.length) return;
+      for (const s of srcs) {
+        if (!s.url) continue;
+        const h = fmHealth[s.url];
+        const age = h ? (Date.now() - (h.ts || 0)) : 1e15;
+        if (h && age < FM_HEALTH_TTL) {
+          if (h.ok) {
+            // 活源：复用「可用」结论，但重新测速（延迟会变，且首次需填充 latency 才能排序选最快）
+            const r = await probeTimed(s.url);
+            s.ok = r.ok; s.latency = r.ok ? r.latency : null; s.dead = !r.ok; s.checkedAt = Date.now();
+            fmHealth[s.url] = { ok: r.ok, latency: (r.latency == null ? null : r.latency), ts: Date.now() };
+            if (r.ok) alive++; else dead++;
+          } else {
+            // 死源：复用缓存，不重测（省去 12s 超时）
+            s.ok = false; s.latency = null; s.dead = true; s.checkedAt = h.ts || 0;
+            dead++;
+          }
+          continue;
         }
+        checked++;
+        const r = await probeTimed(s.url);
+        s.ok = r.ok; s.latency = r.ok ? r.latency : null; s.dead = !r.ok; s.checkedAt = Date.now();
+        fmHealth[s.url] = { ok: r.ok, latency: (r.latency == null ? null : r.latency), ts: Date.now() };
+        if (r.ok) alive++; else dead++;
       }
-      // 2) 未查过、或上次判定「无替代源」已过期：去 radio-browser 找 蜻蜓FM 替代
-      const noneKey = 'none:' + st.name;
-      const noneTs = (fmHealth[noneKey] && fmHealth[noneKey].ts) || 0;
-      if (!cached || (cached === 'NONE' && Date.now() - noneTs > FM_NONE_RETRY)) {
-        const rep = await findQtfmReplacement(st.name);
-        fmOverrides[st.name] = rep || 'NONE';
-        fmHealth[noneKey] = { ok: false, ts: Date.now() };
-        if (rep && rep !== url) {
-          st.url = rep; fixed++;
-          fmHealth[rep] = { ok: true, ts: Date.now() };
+      const chosen = pickBest(st);
+      if (chosen && chosen !== st.url) { st.url = chosen; switched++; }
+      if (!chosen) {
+        // 本台所有源都失效：去 radio-browser / 喜马拉雅找新源补进池（受 3 天窗口限制，避免天天狂查）
+        const noneTs = (fmHealth['none:' + st.name] && fmHealth['none:' + st.name].ts) || 0;
+        if (Date.now() - noneTs > FM_NONE_RETRY) {
+          const rep = await findReplacement(st.name, st.sourceId);
+          if (rep) {
+            if (!st.sources.some((x) => x.url === rep)) {
+              st.sources.push({
+                url: rep, type: isPlaylistByUrl(rep) ? 'hls' : 'mp3',
+                from: 'fallback', ok: true, latency: null, dead: false, checkedAt: Date.now(), note: ''
+              });
+            }
+            st.url = rep; fmHealth[rep] = { ok: true, ts: Date.now() }; fallback++;
+          }
+          fmHealth['none:' + st.name] = { ok: false, ts: Date.now() };
         }
       }
     }));
   }
-  if (fixed) saveDB();
+  saveDB();
   saveFmAux();
-  const noAlt = Object.keys(fmOverrides).filter((k) => fmOverrides[k] === 'NONE').length;
-  log('fm repair done: checked=%d dead=%d fixed=%d noAlt=%d', checked, dead, fixed, noAlt);
+  log('pool refresh: checked=%d alive=%d dead=%d switched=%d fallback=%d',
+    checked, alive, dead, switched, fallback);
 }
 /* 本地烘焙台标：沙箱把台标图下载到 presets/logos/，manifest 记录
  * canonical 运行期 URL -> 本地文件名。命中即改写为站内 /logo/ 路径，
@@ -240,6 +418,121 @@ let LOGO_LOCAL = {};
 try {
   LOGO_LOCAL = JSON.parse(fs.readFileSync(path.join(FM_LOGO_DIR, 'manifest.json'), 'utf8'));
 } catch (e) { LOGO_LOCAL = {}; }
+/* ------------------------------------------------------------------ *
+ * 跨源台标索引（presets/logo-index.json）——给「其它源里没台标的台」补图
+ *
+ * 由 gen_logo_index.py 生成，两个数据源：
+ *   A. 喜马拉雅官方封面 imagev2.xmcdn.com（官方原版方图，NAS 实测 200）
+ *   B. fanmingming/live 电台图库（走 ghproxy 镜像，NAS 实测可达）
+ * 每个源都建「精确名」+「归一化名」双索引（归一化 = 去空格/频率号/尾部后缀），
+ * 运行时按 喜马拉雅精确 → fanmingming 精确 → 喜马拉雅归一化 → fanmingming 归一化
+ * 的顺序解析，补到本来没台标（或台标指向已删除的 codeberg 图床）的台上。
+ * 优点：纯本地查表，运行期不多一次网络请求。
+ * ------------------------------------------------------------------ */
+let LOGO_INDEX = { exact: {}, norm: {} };
+/* fanmingming 图库里「真实存在」的文件名清单（由 gen_logo_index.py 烘焙）。
+ * 用途：源里有些台标是按台名**猜**出来的 fanmingming 名（上游 codeberg 图床已删除，
+ * 解析时只能猜），猜得对不对没法靠 URL 本身判断 —— 用这份白名单一查就知道，
+ * 不在名单里的就是 404 死链，必须换成索引里的真图，否则 /img 会退回占位图。 */
+let FM_VALID_NAMES = new Set();
+let FM_VALID_LOWER = new Set();
+try {
+  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'presets', 'logo-index.json'), 'utf8'));
+  LOGO_INDEX = { exact: raw.exact || {}, norm: raw.norm || {} };
+  for (const n of (raw.fmNames || [])) {
+    FM_VALID_NAMES.add(n);
+    FM_VALID_LOWER.add(String(n).toLowerCase());
+  }
+} catch (e) { LOGO_INDEX = { exact: {}, norm: {} }; }
+
+/* 台名归一化 —— 必须与 gen_logo_index.py 的 norm() 保持一致 */
+const LOGO_NORM_FREQ = [
+  /FM\s*\d+(?:\.\d+)?/gi,
+  /\d+(?:\.\d+)?\s*MHz/gi,
+  /\d+(?:\.\d+)?\s*兆赫/gi,
+  /(?<![0-9A-Za-z])\d{2,4}(?![0-9A-Za-z])/g
+];
+const LOGO_NORM_SUFFIX = ['广播电视台', '人民广播电台', '广播电视', '广播电台', '电台', '广播', '频率'];
+function normLogoName(name) {
+  let s = String(name || '').replace(/[\s\u3000]+/g, '');
+  for (const re of LOGO_NORM_FREQ) s = s.replace(re, '');
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const suf of LOGO_NORM_SUFFIX) {
+      if (s.length > suf.length + 1 && s.slice(-suf.length) === suf) {
+        s = s.slice(0, -suf.length);
+        changed = true;
+      }
+    }
+  }
+  return s;
+}
+
+/** 查索引，返回 [优先级, 台标URL, 来源] 或 null */
+function logoIndexLookup(name) {
+  if (!name) return null;
+  const hit = LOGO_INDEX.exact[name];
+  if (hit) return hit;
+  const k = normLogoName(name);
+  if (!k) return null;
+  return LOGO_INDEX.norm[k] || null;
+}
+
+/** 取 URL 里最后一段文件名（去掉扩展名、解开百分号编码） */
+function logoFileName(u) {
+  if (!u) return '';
+  const i = u.lastIndexOf('/');
+  const seg = (i >= 0 ? u.slice(i + 1) : u).split('?')[0].split('#')[0];
+  let s = seg;
+  try { s = decodeURIComponent(seg); } catch (e) { s = seg; }
+  return s.replace(/\.[A-Za-z0-9]{2,5}$/, '');
+}
+
+/**
+ * 判断一个台标 URL 是不是「死链」
+ *   - 空 → 死
+ *   - huangsuming.codeberg.page → 该图床已整站删除，死
+ *   - fanmingming/jsdelivr 但文件名不在图库白名单 → 按台名猜出来的 404，死
+ */
+function isDeadLogo(l) {
+  if (!l) return true;
+  if (/huangsuming\.codeberg\.page/i.test(l)) return true;
+  const isFmLib = (/fanmingming/i.test(l) || /jsdelivr\.net\/gh\/fanmingming/i.test(l))
+    && l.indexOf('/radio/') >= 0;
+  if (isFmLib) {
+    const b = logoFileName(l);
+    if (!b) return true;
+    return !(FM_VALID_NAMES.has(b) || FM_VALID_LOWER.has(b.toLowerCase()));
+  }
+  return false;
+}
+
+/**
+ * 决定一个电台最终用的台标：
+ *   源里已带且确实是好图 → 原样保留（不覆盖）
+ *   缺图 / 图床已删除 / 猜名猜出来的死链 → 查跨源索引补真图（喜马拉雅官方封面优先）
+ *   索引也查不到 → 返回空串，由前端降级成「首字彩色头像」
+ *     （不再退回按名猜 fanmingming —— 猜出来 ~8% 是 404，反而白闪一次）
+ */
+function resolveLogo(name, logo) {
+  const l = normalizeLogo(logo || '');
+  if (!isDeadLogo(l)) return l;
+  const hit = logoIndexLookup(name) || logoIndexLookup(cleanRadioName(name || ''));
+  if (hit && hit[1]) return hit[1];
+  return '';
+}
+
+/** 启动时把已落库的台站台标再跑一遍解析（历史遗留的死链/缺图一并修掉） */
+function repairStationLogos() {
+  let n = 0;
+  for (const s of db.stations) {
+    const after = resolveLogo(s.name, s.logo);
+    if (after !== (s.logo || '')) { s.logo = after; n++; }
+  }
+  return n;
+}
+
 const FM_CATEGORIES = [
   '上海', '云南', '体育频道', '儿童频道', '其他频道', '内蒙古', '北京', '卫视频道',
   '台湾频道', '吉林', '四川', '地方频道', '境外广播', '央视频道', '宁夏', '安徽', '山东', '山西',
@@ -277,6 +570,41 @@ function ensureQingtingSource() {
       name: QINGTING_SOURCE_NAME,
       url: 'file://presets/' + QINGTING_FILE,
       local: QINGTING_FILE,
+      builtin: true,
+      enabled: true,
+      count: 0,
+      lastLoad: '',
+      error: ''
+    });
+  }
+  return db.sources.find((s) => s.id === id);
+}
+
+/* ------------------------------------------------------------------ *
+ * 喜马拉雅（杰翔电台内置）广播电台订阅源
+ *
+ * presets/jiexiang-radio.m3u：从喜马拉雅开放平台 /live/get_radios_by_category
+ * 扒取的各地广播电台直播源（HLS，无签名、稳定），按电台名中的省份/地区
+ * 分了 group-title。直链形如：
+ *   http://live.ximalaya.com/radio-first-page-app/live/<id>/64.m3u8
+ * 由 server.js 启动时作为内置订阅源加载。
+ * ------------------------------------------------------------------ */
+const JIEXIANG_SOURCE_NAME = '喜马拉雅电台（内置）';
+const JIEXIANG_FILE = 'jiexiang-radio.m3u';
+
+function jiexiangSrcId() {
+  return idOf('src', 'preset:' + JIEXIANG_FILE);
+}
+
+/** 首次启动/每次启动确保内置 喜马拉雅 订阅源存在（已存在则跳过） */
+function ensureJiexiangSource() {
+  const id = jiexiangSrcId();
+  if (!db.sources.some((s) => s.id === id)) {
+    db.sources.push({
+      id,
+      name: JIEXIANG_SOURCE_NAME,
+      url: 'file://presets/' + JIEXIANG_FILE,
+      local: JIEXIANG_FILE,
       builtin: true,
       enabled: true,
       count: 0,
@@ -595,6 +923,11 @@ function parseM3U(text, baseUrl) {
     }
     if (line.charAt(0) === '#') continue;
     const abs = resolveUrl(line, baseUrl);
+    /* 只收 http/https。hacks.tools 的分类 m3u 末尾都混了一行裸文本
+     * "updateTime: 2025-05-06 13:16:15"（无 # 前缀），而 new URL() 会把
+     * "updateTime:" 当成协议名解析成一个「合法 URL」，于是每个分类里都会
+     * 多出一个叫 updateTime 的幽灵电台。这里直接判死。 */
+    if (!abs || !/^https?:\/\//i.test(abs)) { cur = null; continue; }
     if (abs) {
       out.push({
         name: (cur && cur.name) || line,
@@ -823,18 +1156,29 @@ async function loadSource(src) {
     db.stations = db.stations.filter((s) => s.sourceId !== src.id);
     let n = 0;
     for (const it of items) {
-      const id = idOf('st', it.url);
-      if (db.stations.some((s) => s.id === id)) {
-        // 同 URL 已存在则补上来源标记，不重复添加
-        const exist = db.stations.find((s) => s.id === id);
-        if (!exist.sourceId) exist.sourceId = src.id;
-        continue;
+      let id = idOf('st', it.url);
+      const exist = db.stations.find((s) => s.id === id);
+      if (exist) {
+        // 老数据没记来源：直接认领，不重复添加
+        if (!exist.sourceId) {
+          exist.sourceId = src.id; exist.sourceName = src.name; n++;
+          continue;
+        }
+        // 同源重复：跳过
+        if (exist.sourceId === src.id) continue;
+        /* 同一路流已被别的源收录（如内置预置里的台大多也被 FM 源收录）。
+         * 这种跨源重复要各留一份（界面按来源区分），但不能共用同一个 id ——
+         * id 由 URL 派生，共用会让收藏/历史串台。故给本源生成带来源前缀的独立 id。
+         * 注：若这里直接把整条丢掉，像「国内电台（内置）」这种与 FM 源高度重叠的
+         * 源刷新后会整体变成 0 条。 */
+        id = idOf('st', src.id + '|' + it.url);
+        if (db.stations.some((s) => s.id === id)) continue;
       }
       db.stations.push({
         id,
         name: it.name,
         url: it.url,
-        logo: normalizeLogo(it.logo || ''),
+        logo: resolveLogo(it.name, it.logo),
         group: it.group || '',
         sourceId: src.id,
         sourceName: src.name,
@@ -845,7 +1189,7 @@ async function loadSource(src) {
     }
     src.count = n;
     src.lastLoad = new Date().toISOString();
-    if (!n) src.error = '解析出 0 个电台（文件可能为空或格式不支持）';
+    if (!items.length) src.error = '解析出 0 个电台（文件可能为空或格式不支持）';
     log('source %s -> %d stations', src.name, n);
     return n;
   } catch (e) {
@@ -928,7 +1272,7 @@ async function loadFmRadio(src) {
           id: idOf('st', it.url),
           name: it.name,
           url: resolveFmUrl(it.name, it.url),
-          logo: normalizeLogo(it.logo || ''),
+          logo: resolveLogo(it.name, it.logo),
           group: it.group || '',
           sourceId: src.id,
           sourceName: src.name,
@@ -963,7 +1307,7 @@ async function loadFmRadio(src) {
           id,
           name: it.name,
           url: resolveFmUrl(it.name, it.url),
-          logo: normalizeLogo(it.logo || ''),
+          logo: resolveLogo(it.name, it.logo),
           group: it.group || '',
           sourceId: src.id,
           sourceName: src.name,
@@ -997,6 +1341,227 @@ async function loadFmRadio(src) {
  *   - 重启不会推迟同步（过期即补）
  *   - 同步时间点跟随真实 lastLoad，界面上永远能看到最新的同步时间
  */
+/* ------------------------------------------------------------------ *
+ * 综合电台（内置）
+ *
+ * https://radio5.cn 是 WordPress 电台目录站，525+ 个国内电台。
+ * 每个电台详情页 /play/radio/<slug> 带 data-play-id（post_id），真实流地址
+ * 经 WP REST 接口 GET https://radio5.cn/api/play/play/<post_id> 返回，含：
+ *   - stream_url：直接可播的 mp3 直链（多为 lhttp.qingting.fm / lhttp.qtfm.cn CDN）
+ *   - artwork_url：300x300 台标
+ *   - title：台名
+ * 该接口无需登录 / nonce。目录经 /api/loop/more?type=station&taxQuery[0]=genre:radio
+ * 分页获取（返回 JSON 包裹的 HTML，含 data-play-id / 台标 / slug）。
+ * 为减轻对上游压力并加速每日同步，post_id -> stream_url 缓存在 radio5-cache.json。
+ * ------------------------------------------------------------------ */
+const RADIO5_SOURCE_NAME = '综合电台（内置）';
+const RADIO5_SOURCE_URL = 'builtin://radio';
+const RADIO5_OLD_NAMES = ['Radio5.cn 电台（爬取）', 'Radio5.cn 电台（每日同步）'];
+const RADIO5_BASE = 'https://radio5.cn';
+const RADIO5_CACHE_FILE = path.join(DATA_DIR, 'radio5-cache.json');
+
+function radio5SrcId() {
+  return idOf('src', 'radio5-cn');
+}
+
+function ensureRadio5Source() {
+  const id = radio5SrcId();
+  let s = db.sources.find((x) => x.id === id);
+  if (!s) {
+    s = {
+      id,
+      name: RADIO5_SOURCE_NAME,
+      url: RADIO5_SOURCE_URL,
+      builtin: true,
+      remote: true,
+      fm: true,
+      enabled: true,
+      count: 0,
+      lastLoad: '',
+      error: ''
+    };
+    db.sources.push(s);
+  } else {
+    // 改名 / 换显示 URL 后，同步旧库中的条目（id 不变，不孤立既有 401 个站）
+    s.name = RADIO5_SOURCE_NAME;
+    s.url = RADIO5_SOURCE_URL;
+    s.builtin = true;
+    s.remote = true;
+    s.fm = true;
+  }
+  migrateRadio5Names();
+  return s;
+}
+
+/** 一次性迁移：把旧库中残留的旧源名（含 Radio5.cn / 爬取）改写为新显示名 */
+function migrateRadio5Names() {
+  const oldSet = new Set(RADIO5_OLD_NAMES);
+  let n = 0;
+  for (const s of db.sources) if (oldSet.has(s.name)) { s.name = RADIO5_SOURCE_NAME; n++; }
+  for (const st of db.stations) {
+    if (oldSet.has(st.sourceName)) { st.sourceName = RADIO5_SOURCE_NAME; n++; }
+    if (Array.isArray(st.sources)) {
+      for (const src of st.sources) if (oldSet.has(src.from)) { src.from = RADIO5_SOURCE_NAME; n++; }
+    }
+  }
+  if (n) log('radio5 rename migration: %d labels -> %s', n, RADIO5_SOURCE_NAME);
+  return n;
+}
+
+function loadRadio5Cache() {
+  try {
+    return JSON.parse(fs.readFileSync(RADIO5_CACHE_FILE, 'utf8'));
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveRadio5Cache(map) {
+  try {
+    fs.writeFileSync(RADIO5_CACHE_FILE, JSON.stringify(map));
+  } catch (e) { /* 缓存写失败不影响主流程 */ }
+}
+
+/** 分页枚举 radio5.cn 电台目录，返回 [{id,title,logo,slug}] */
+async function radio5Enumerate() {
+  const out = [];
+  const seen = new Set();
+  for (let p = 1; p <= 30; p++) {
+    const q = new URLSearchParams({
+      type: 'station',
+      'taxQuery[0]': 'genre:radio',
+      orderby: 'date', order: 'DESC', cols: '6', pages: '30',
+      pager: 'more', sliderArrows: '1', ratio: '1', paged: String(p)
+    }).toString();
+    let html;
+    try {
+      const res = await requestUpstream(RADIO5_BASE + '/api/loop/more?' + q, {
+        'Accept': 'application/json, */*', 'X-Requested-With': 'XMLHttpRequest',
+        'Referer': RADIO5_BASE + '/fm/'
+      }, 'radio5');
+      if (res.statusCode !== 200) { res.resume(); break; }
+      const buf = await readAll(res);
+      let txt = decompress(buf, (res.headers['content-encoding'] || '').toLowerCase()).toString('utf8');
+      try {
+        const j = JSON.parse(txt);
+        if (j && typeof j.content === 'string') txt = j.content;
+      } catch (e) { /* 非 JSON 包裹则原样 */ }
+      html = txt;
+    } catch (e) {
+      log('radio5 enumerate page %d failed: %s', p, e.message);
+      break;
+    }
+    const blocks = html.match(/data-play-id="(\d+)"[\s\S]*?<\/article>/g) || [];
+    if (!blocks.length) break;
+    for (const blk of blocks) {
+      const mId = /data-play-id="(\d+)"/.exec(blk);
+      if (!mId) continue;
+      const id = parseInt(mId[1], 10);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const mTitle = /alt="([^"]*)"/.exec(blk);
+      const mLogo = /src="(https:\/\/radio5\.cn\/file\/[^"]+?)"/.exec(blk);
+      const mSlug = /\/play\/radio\/([a-z0-9\-]+)"/.exec(blk);
+      out.push({
+        id,
+        title: (mTitle ? mTitle[1] : '').trim(),
+        logo: mLogo ? mLogo[1] : '',
+        slug: mSlug ? mSlug[1] : ''
+      });
+    }
+  }
+  return out;
+}
+
+/** 取单台真实流地址（带缓存） */
+async function radio5StreamUrl(id, cache) {
+  if (cache[id]) return cache[id];
+  try {
+    const res = await requestUpstream(RADIO5_BASE + '/api/play/play/' + id, {
+      'Accept': 'application/json, */*',
+      'Referer': RADIO5_BASE + '/fm/'
+    }, 'radio5');
+    if (res.statusCode !== 200) { res.resume(); return ''; }
+    const buf = await readAll(res);
+    const txt = decompress(buf, (res.headers['content-encoding'] || '').toLowerCase()).toString('utf8');
+    const j = JSON.parse(txt);
+    let u = j && j.stream_url;
+    if (Array.isArray(u)) u = u[0];           // 少数台返回多个流地址，取第一个
+    u = (typeof u === 'string') ? u.trim() : '';
+    if (/^https?:\/\//i.test(u)) return u;
+  } catch (e) {
+    log('radio5 stream %d failed: %s', id, e.message);
+  }
+  return '';
+}
+
+/**
+ * 加载 radio5.cn 源：枚举目录 -> 解析流地址（缓存）-> 按 url 去重并入 stations。
+ */
+async function loadRadio5(src) {
+  try {
+    src.error = '';
+    const catalog = await radio5Enumerate();
+    if (!catalog.length) { src.error = '目录枚举为 0'; return 0; }
+    const cache = loadRadio5Cache();
+    let dirty = false;
+    const items = [];
+    const seen = new Set();
+    const CONC = 8; // 限制并发，避免对上游瞬时 525 请求
+    for (let i = 0; i < catalog.length; i += CONC) {
+      const batch = catalog.slice(i, i + CONC);
+      const urls = await Promise.all(batch.map((c) => radio5StreamUrl(c.id, cache)));
+      batch.forEach((c, k) => {
+        const u = urls[k];
+        if (typeof u !== 'string' || !u) return;   // 防御：非字符串/空跳过，不污染缓存
+        if (!cache[c.id]) { cache[c.id] = u; dirty = true; }
+        const key = idOf('st', u);
+        if (seen.has(key)) return;
+        seen.add(key);
+        items.push({ url: u, name: c.title, logo: c.logo, group: '' });
+      });
+    }
+    if (dirty) saveRadio5Cache(cache);
+
+    if (items.length) {
+      db.stations = db.stations.filter((s) => s.sourceId !== src.id);
+      for (const it of items) {
+        let id = idOf('st', it.url);
+        const exist = db.stations.find((s) => s.id === id);
+        if (exist) {
+          if (!exist.sourceId) { exist.sourceId = src.id; exist.sourceName = src.name; continue; }
+          if (exist.sourceId === src.id) continue;
+          id = idOf('st', src.id + '|' + it.url);
+          if (db.stations.some((s) => s.id === id)) continue;
+        }
+        db.stations.push({
+          id,
+          name: it.name,
+          url: it.url,
+          logo: resolveLogo(it.name, it.logo),
+          group: it.group || '',
+          sourceId: src.id,
+          sourceName: src.name,
+          referer: '',
+          addedAt: new Date().toISOString()
+        });
+      }
+      src.count = items.length;
+      src.lastLoad = new Date().toISOString();
+      src.stale = false;
+      src.error = '内置 ' + catalog.length + ' 台，可用 ' + items.length + ' 路';
+      log('radio5 -> %d stations (catalog %d)', items.length, catalog.length);
+      return items.length;
+    }
+    src.error = '解析出 0 个可用电台';
+    return 0;
+  } catch (e) {
+    src.error = '加载失败: ' + (e.message || e);
+    log('radio5 load error: %s', (e && e.stack) ? e.stack : (e.message || e));
+    return 0;
+  }
+}
+
 function scheduleFmSync() {
   const hours = Math.max(parseInt(process.env.FM_SYNC_HOURS || '24', 10), 1);
   const intervalMs = hours * 3600 * 1000;
@@ -1016,8 +1581,8 @@ function scheduleFmSync() {
     running = true;
     if (s.stale === true) staleRetryAt = Date.now() + STALE_RETRY_GAP;
     log('fm sync due (lastLoad=%s, age=%.1fh), syncing...', s.lastLoad || 'never', ageMs / 3600000);
-    loadFmRadio(s)
-      .then(() => { seedFmOverridesFromStations(); saveDB(); repairFmStreams(); })
+    Promise.all([loadFmRadio(s), loadRadio5(ensureRadio5Source())])
+      .then(() => { seedFmOverridesFromStations(); saveDB(); refreshPool(); })
       .catch((e) => log('fm sync error: %s', (e && e.message) || e))
       .then(() => { running = false; });
   };
@@ -1064,7 +1629,7 @@ async function discover(params) {
         id: idOf('rb', s.stationuuid || s.url),
         name: (s.name || '').trim() || s.url,
         url: s.url_resolved || s.url,
-        logo: s.favicon ? normalizeLogo(s.favicon) : '',
+        logo: resolveLogo((s.name || '').trim(), s.favicon || ''),
         group: s.tags || '',
         country: s.country || '',
         codec: s.codec || '',
@@ -1357,7 +1922,7 @@ const server = http.createServer(async (req, res) => {
           id,
           name: (body.name || '').trim() || body.url,
           url: body.url,
-          logo: normalizeLogo(body.logo || ''),
+          logo: resolveLogo((body.name || '').trim(), body.logo || ''),
           group: body.group || '',
           // 由调用方指明来源，便于区分「手动添加」与「粘贴导入」
           sourceName: (body.sourceName || '').trim() || '手动添加',
@@ -1372,6 +1937,24 @@ const server = http.createServer(async (req, res) => {
         saveDB();
         return sendJSON(res, { stations: db.stations });
       }
+    }
+
+    /* ---------- 单个电台：手动选源（持久化，覆盖自动选最快） ---------- */
+    if (/^\/api\/station\/[^/]+\/select$/.test(p) && req.method === 'POST') {
+      const id = decodeURIComponent(p.split('/')[3]);
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const st = db.stations.find((s) => s.id === id);
+      if (!st) return sendError(res, 404, 'station not found');
+      if (!body.url || !/^https?:/i.test(body.url)) return sendError(res, 400, 'url 无效');
+      if (!st.sources || !st.sources.some((s) => s.url === body.url)) {
+        return sendError(res, 400, '该地址不在本台源池中');
+      }
+      st.manualUrl = body.url;
+      // 立即让 st.url 反映手动选择（手动源可达则用它，否则退回最快可达源，绝不指向死链）
+      const chosen = pickBest(st);
+      if (chosen) st.url = chosen;
+      saveDB();
+      return sendJSON(res, { station: st });
     }
 
     /* ---------- 收藏 ---------- */
@@ -1419,15 +2002,40 @@ const server = http.createServer(async (req, res) => {
 });
 
 loadDB();
-/* 内置 hacks.tools FM 源：启动即拉取一次（后台，不阻塞监听），并每日自动同步 */
+
+/* 启动清理：① 丢掉历史遗留的「元数据伪电台」（hacks.tools 的 updateTime 行曾被当 URL）；
+ * ② 把已落库台站的台标重跑一遍跨源索引解析（补缺图、修 codeberg 死链）。 */
+(function startupStationCleanup() {
+  const before = db.stations.length;
+  db.stations = db.stations.filter((s) =>
+    s.url && /^https?:\/\//i.test(s.url) && !/^updateTime/i.test(s.name || ''));
+  const dropped = before - db.stations.length;
+  const logoFixed = repairStationLogos();
+  enrichPools(); // 旧数据补 sources 源池（仅建池，不探测；refreshPool 会写回探测结果）
+  // 同步修正各源的台站计数，避免界面显示与实际不符
+  for (const src of db.sources) {
+    src.count = db.stations.filter((s) => s.sourceId === src.id).length;
+  }
+  saveDB();
+  log('startup cleanup: dropped=%d phantom, logo-fixed=%d, pool=%d stations',
+      dropped, logoFixed, db.stations.length);
+})();
+
+/* 三个内置源并行加载，全部就绪后再做 替代源固化 + 喜马拉雅 fallback 建表 + 全量体检，
+ * 避免 repair 在 喜马拉雅源 尚未入库时抢先跑、导致 fallback 无法命中 */
 loadFmAux(); // 载入按名缓存的替代源与健康状态
 const fmSrc = ensureFmSource();
-loadFmRadio(fmSrc).then(() => { seedFmOverridesFromStations(); saveDB(); repairFmStreams(); log('fm radio seeded'); });
-scheduleFmSync();
-
-/* 内置 蜻蜓FM 源：作为本地预置订阅源加载（NAS 实测可放的 qtfm 直链） */
 const qtSrc = ensureQingtingSource();
-loadSource(qtSrc).then(() => { saveDB(); log('qingting radio seeded: %d stations', qtSrc.count); });
+const jxSrc = ensureJiexiangSource();
+const r5Src = ensureRadio5Source();
+Promise.all([loadFmRadio(fmSrc), loadSource(qtSrc), loadSource(jxSrc), loadRadio5(r5Src)]).then(() => {
+  seedFmOverridesFromStations();
+  buildXimalayaMap(); // 喜马拉雅源已入库，建 台名->HLS 直链 索引供 fallback 使用
+  saveDB();
+  refreshPool();
+  log('fm radio seeded (fm=%d qingting=%d jiexiang=%d)', fmSrc.count, qtSrc.count, jxSrc.count);
+});
+scheduleFmSync();
 
 server.listen(PORT, '0.0.0.0', () => {
   log('jiexiang-radio listening on %d, data=%s', PORT, DATA_FILE);

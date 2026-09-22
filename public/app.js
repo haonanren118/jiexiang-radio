@@ -224,12 +224,14 @@
     return '/img?url=' + enc(url);
   }
 
-  /** 仅对源里没带 logo 的电台做名称猜测（不要覆盖已有的 logo） */
-  function guessLogo(name) {
-    if (!name) return '';
-    if (logoFailed[name]) return '';
-    return 'https://fastly.jsdelivr.net/gh/fanmingming/live@main/radio/' +
-      encodeURIComponent(name) + '.png';
+  /** 台标兜底。
+   *  以前这里会按台名去猜 fastly.jsdelivr.net 上的 fanmingming 图 —— 但该域名
+   *  在国内宽带上不可达，浏览器每次都要等一次必然失败的请求才退回头像，白闪一下。
+   *  现在补图统一由服务端做（presets/logo-index.json：喜马拉雅官方封面 +
+   *  fanmingming 归一化清单），服务端没给出 logo 就是这个台真的没有封面，
+   *  直接返回空串让调用方用首字头像，不再发无谓请求。 */
+  function guessLogo() {
+    return '';
   }
 
   function hashCode(s) {
@@ -291,6 +293,7 @@
     head.appendChild(logoNode(st, 'slogo'));
     head.insertAdjacentHTML('beforeend',
       '<div class="stitle"><strong>' + esc(st.name) + '</strong>' +
+      (st.poolCount > 1 ? '<em class="srcbadge" title="' + st.poolCount + ' 个播放源可用">🔗' + st.poolCount + '</em>' : '') +
       '<span>' + esc(sub.join(' · ')) + '</span></div>');
     el.appendChild(head);
     el.insertAdjacentHTML('beforeend',
@@ -673,22 +676,29 @@
 
     var meta = st ? [st.sourceName || st.country, st.group].filter(Boolean).join(' · ') : '';
     $('np-meta').textContent = meta || (st ? '电台' : '选一个电台开始收听');
+    var sb = $('btn-src');
+    if (sb) {
+      var n = (st && st.poolCount) || (st && st.sources ? st.sources.length : 0);
+      if (n > 1) { sb.hidden = false; $('np-srcn').textContent = n; }
+      else sb.hidden = true;
+    }
     if (msg) setSub(msg);
   }
 
-  function play(st) {
+  function play(st, chosenUrl) {
     if (!st || !st.url) return;
+    var useUrl = (chosenUrl && st.sources && st.sources.some(function (x) { return x.url === chosenUrl; })) ? chosenUrl : st.url;
     stopAll();
     pushHistory(st);
     setNowPlaying(st, '连接中');
     setPlaying(false);
 
     var chain = [];
-    if (isHls(st.url)) {
-      chain.push({ name: 'HLS 代理', run: function () { return playHls(hlsSrc(st.url, st.referer)); } });
-      chain.push({ name: '原生 HLS', run: function () { return playNative(hlsSrc(st.url, st.referer)); } });
+    if (isHls(useUrl)) {
+      chain.push({ name: 'HLS 代理', run: function () { return playHls(hlsSrc(useUrl, st.referer)); } });
+      chain.push({ name: '原生 HLS', run: function () { return playNative(hlsSrc(useUrl, st.referer)); } });
     }
-    chain.push({ name: '直连代理', run: function () { return playNative(proxySrc(st.url, st.referer)); } });
+    chain.push({ name: '直连代理', run: function () { return playNative(proxySrc(useUrl, st.referer)); } });
 
     var i = 0;
     function next() {
@@ -712,6 +722,41 @@
       });
     }
     next();
+  }
+
+  function renderSrcMenu(st) {
+    var pop = $('src-pop'); if (!pop || !st) return;
+    var cur = st.manualUrl || st.url;
+    var srcs = (st.sources || []).slice().sort(function (a, b) {
+      var oa = (a.ok && !a.dead), ob = (b.ok && !b.dead);
+      if (oa !== ob) return oa ? -1 : 1;
+      var la = a.latency == null ? 1e9 : a.latency, lb = b.latency == null ? 1e9 : b.latency;
+      return la - lb;
+    });
+    var html = '<div class="srcmenu-h">播放源（按速度排序，绿=可放）</div>';
+    srcs.forEach(function (x) {
+      var isCur = (x.url === cur);
+      var stat = (x.ok === false || x.dead) ? '死链' : (x.ok ? (x.latency != null ? (x.latency + 'ms') : '可放') : '未测');
+      html += '<button class="srci' + (isCur ? ' cur' : '') + '" data-u="' + esc(x.url) + '">' +
+        '<span class="srci-from">' + esc(x.from || '源') + '</span>' +
+        '<span class="srci-stat ' + ((x.ok === false || x.dead) ? 'dead' : (x.ok ? 'ok' : '')) + '">' + stat + '</span></button>';
+    });
+    pop.innerHTML = html;
+    Array.prototype.forEach.call(pop.querySelectorAll('.srci'), function (b) {
+      b.onclick = function () {
+        var u = b.getAttribute('data-u');
+        pop.hidden = true;
+        st.manualUrl = u; // 本地即时标记当前源，菜单高亮不滞后
+        play(st, u);
+        post('/api/station/' + enc(st.id) + '/select', { url: u }).catch(function () {});
+      };
+    });
+  }
+  function toggleSrcMenu() {
+    var pop = $('src-pop'); if (!pop || !current) return;
+    if (!pop.hidden) { pop.hidden = true; return; }
+    renderSrcMenu(current);
+    pop.hidden = false;
   }
 
   function refreshCurrentViews() {
@@ -767,6 +812,7 @@
   }
 
   function bindIcons() {
+    var sb = $('btn-src'); if (sb) sb.onclick = toggleSrcMenu;
     $('btn-theme').addEventListener('click', function () {
       themeMode = themeMode === 'dark' ? 'light' : 'dark';
       localStorage.setItem('jxr-theme', themeMode);

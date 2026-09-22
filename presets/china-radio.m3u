@@ -73,7 +73,7 @@ https://satellitepull.cnr.cn/live/wxhebwygb/playlist.m3u8
 https://satellitepull.cnr.cn/live/wxhebzhgb/playlist.m3u8
 #EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="https://live.fanmingming.com/radio/河北交通广播.png" group-title="综合广播",河北交通广播
 https://satellitepull.cnr.cn/live/wxhebjtgb/playlist.m3u8
-#EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="https://live.fanmingming.com/radio/河北故事广播.png" group-title="综合广播",河北经济广播
+#EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="" group-title="综合广播",河北经济广播
 https://satellitepull.cnr.cn/live/wxhebjjgb/playlist.m3u8
 #EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="https://live.fanmingming.com/radio/河北生活广播.png" group-title="综合广播",河北生活广播
 https://satellitepull.cnr.cn/live/wxhebshgb/playlist.m3u8
@@ -177,7 +177,7 @@ https://satellitepull.cnr.cn/live/wxxjsjcgb/playlist.m3u8
 https://satellitepull.cnr.cn/live/wxgshhzs/playlist.m3u8
 #EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="https://live.fanmingming.com/radio/广西教育广播.png" group-title="综合广播",广西教育广播
 https://satellitepull.cnr.cn/live/wx32gbjyshgb/playlist.m3u8
-#EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="https://live.fanmingming.com/radio/广西新闻广播.png" group-title="综合广播",广西综合广播
+#EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="" group-title="综合广播",广西综合广播
 https://satellitepull.cnr.cn/live/wx32gxrmgb/playlist.m3u8
 #EXTINF:-1 tvg-id="" tvg-name="" tvg-logo="https://live.fanmingming.com/radio/广西北部湾之声.png" group-title="综合广播",广西北部湾之声
 https://satellitepull.cnr.cn/live/wx32gxdwgb/playlist.m3u8
