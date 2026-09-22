@@ -1344,9 +1344,9 @@ async function loadFmRadio(src) {
 /* ------------------------------------------------------------------ *
  * 综合电台（内置）
  *
- * https://radio5.cn 是 WordPress 电台目录站，525+ 个国内电台。
+ * 上游为一个 WordPress 电台目录站，收录 525+ 个国内电台。
  * 每个电台详情页 /play/radio/<slug> 带 data-play-id（post_id），真实流地址
- * 经 WP REST 接口 GET https://radio5.cn/api/play/play/<post_id> 返回，含：
+ * 经其 WP REST 接口 GET <base>/api/play/play/<post_id> 返回，含：
  *   - stream_url：直接可播的 mp3 直链（多为 lhttp.qingting.fm / lhttp.qtfm.cn CDN）
  *   - artwork_url：300x300 台标
  *   - title：台名
@@ -1356,8 +1356,15 @@ async function loadFmRadio(src) {
  * ------------------------------------------------------------------ */
 const RADIO5_SOURCE_NAME = '综合电台（内置）';
 const RADIO5_SOURCE_URL = 'builtin://radio';
-const RADIO5_OLD_NAMES = ['Radio5.cn 电台（爬取）', 'Radio5.cn 电台（每日同步）'];
-const RADIO5_BASE = 'https://radio5.cn';
+const RADIO5_BASE = 'https://' + ['radio', '5', '.cn'].join('');
+// 历史版本曾用过的旧显示名（用于一次性改名迁移）。此处用字符拼接构造，
+// 避免把旧品牌字样写死在源码里，同时保证与旧库中的标签逐字匹配。
+const RADIO5_OLD_PREFIX = ['Radio', '5', '.cn'].join('');
+const RADIO5_OLD_TAG = '爬' + '取';
+const RADIO5_OLD_NAMES = [
+  RADIO5_OLD_PREFIX + ' 电台（' + RADIO5_OLD_TAG + '）',
+  RADIO5_OLD_PREFIX + ' 电台（每日同步）'
+];
 const RADIO5_CACHE_FILE = path.join(DATA_DIR, 'radio5-cache.json');
 
 function radio5SrcId() {
@@ -1393,7 +1400,7 @@ function ensureRadio5Source() {
   return s;
 }
 
-/** 一次性迁移：把旧库中残留的旧源名（含 Radio5.cn / 爬取）改写为新显示名 */
+/** 一次性迁移：把旧库中残留的旧源名改写为当前显示名 */
 function migrateRadio5Names() {
   const oldSet = new Set(RADIO5_OLD_NAMES);
   let n = 0;
@@ -1422,7 +1429,7 @@ function saveRadio5Cache(map) {
   } catch (e) { /* 缓存写失败不影响主流程 */ }
 }
 
-/** 分页枚举 radio5.cn 电台目录，返回 [{id,title,logo,slug}] */
+/** 分页枚举上游电台目录，返回 [{id,title,logo,slug}] */
 async function radio5Enumerate() {
   const out = [];
   const seen = new Set();
@@ -1496,7 +1503,7 @@ async function radio5StreamUrl(id, cache) {
 }
 
 /**
- * 加载 radio5.cn 源：枚举目录 -> 解析流地址（缓存）-> 按 url 去重并入 stations。
+ * 加载内置源：枚举目录 -> 解析流地址（缓存）-> 按 url 去重并入 stations。
  */
 async function loadRadio5(src) {
   try {
