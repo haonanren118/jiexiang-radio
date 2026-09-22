@@ -1352,7 +1352,7 @@ async function loadFmRadio(src) {
  *   - title：台名
  * 该接口无需登录 / nonce。目录经 /api/loop/more?type=station&taxQuery[0]=genre:radio
  * 分页获取（返回 JSON 包裹的 HTML，含 data-play-id / 台标 / slug）。
- * 为减轻对上游压力并加速每日同步，post_id -> stream_url 缓存在 radio5-cache.json。
+ * 为减轻对上游压力并加速每日同步，post_id -> stream_url 会本地缓存以加速后续同步。
  * ------------------------------------------------------------------ */
 const RADIO5_SOURCE_NAME = '综合电台（内置）';
 const RADIO5_SOURCE_URL = 'builtin://radio';
@@ -1411,7 +1411,7 @@ function migrateRadio5Names() {
       for (const src of st.sources) if (oldSet.has(src.from)) { src.from = RADIO5_SOURCE_NAME; n++; }
     }
   }
-  if (n) log('radio5 rename migration: %d labels -> %s', n, RADIO5_SOURCE_NAME);
+  if (n) log('source rename migration: %d labels -> %s', n, RADIO5_SOURCE_NAME);
   return n;
 }
 
@@ -1445,7 +1445,7 @@ async function radio5Enumerate() {
       const res = await requestUpstream(RADIO5_BASE + '/api/loop/more?' + q, {
         'Accept': 'application/json, */*', 'X-Requested-With': 'XMLHttpRequest',
         'Referer': RADIO5_BASE + '/fm/'
-      }, 'radio5');
+      }, 'builtin');
       if (res.statusCode !== 200) { res.resume(); break; }
       const buf = await readAll(res);
       let txt = decompress(buf, (res.headers['content-encoding'] || '').toLowerCase()).toString('utf8');
@@ -1455,7 +1455,7 @@ async function radio5Enumerate() {
       } catch (e) { /* 非 JSON 包裹则原样 */ }
       html = txt;
     } catch (e) {
-      log('radio5 enumerate page %d failed: %s', p, e.message);
+      log('builtin enumerate page %d failed: %s', p, e.message);
       break;
     }
     const blocks = html.match(/data-play-id="(\d+)"[\s\S]*?<\/article>/g) || [];
@@ -1467,7 +1467,8 @@ async function radio5Enumerate() {
       if (seen.has(id)) continue;
       seen.add(id);
       const mTitle = /alt="([^"]*)"/.exec(blk);
-      const mLogo = /src="(https:\/\/radio5\.cn\/file\/[^"]+?)"/.exec(blk);
+      // 台标位于上游站内 /file/ 路径，用 BASE 动态构造正则（避免把品牌域名写死）
+      const mLogo = new RegExp('src="(' + RADIO5_BASE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\/file\\/[^"]+?)"').exec(blk);
       const mSlug = /\/play\/radio\/([a-z0-9\-]+)"/.exec(blk);
       out.push({
         id,
@@ -1487,7 +1488,7 @@ async function radio5StreamUrl(id, cache) {
     const res = await requestUpstream(RADIO5_BASE + '/api/play/play/' + id, {
       'Accept': 'application/json, */*',
       'Referer': RADIO5_BASE + '/fm/'
-    }, 'radio5');
+    }, 'builtin');
     if (res.statusCode !== 200) { res.resume(); return ''; }
     const buf = await readAll(res);
     const txt = decompress(buf, (res.headers['content-encoding'] || '').toLowerCase()).toString('utf8');
@@ -1497,7 +1498,7 @@ async function radio5StreamUrl(id, cache) {
     u = (typeof u === 'string') ? u.trim() : '';
     if (/^https?:\/\//i.test(u)) return u;
   } catch (e) {
-    log('radio5 stream %d failed: %s', id, e.message);
+    log('builtin stream %d failed: %s', id, e.message);
   }
   return '';
 }
@@ -1557,14 +1558,14 @@ async function loadRadio5(src) {
       src.lastLoad = new Date().toISOString();
       src.stale = false;
       src.error = '内置 ' + catalog.length + ' 台，可用 ' + items.length + ' 路';
-      log('radio5 -> %d stations (catalog %d)', items.length, catalog.length);
+      log('builtin radio -> %d stations (catalog %d)', items.length, catalog.length);
       return items.length;
     }
     src.error = '解析出 0 个可用电台';
     return 0;
   } catch (e) {
     src.error = '加载失败: ' + (e.message || e);
-    log('radio5 load error: %s', (e && e.stack) ? e.stack : (e.message || e));
+    log('builtin radio load error: %s', (e && e.stack) ? e.stack : (e.message || e));
     return 0;
   }
 }
