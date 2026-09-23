@@ -430,8 +430,10 @@
         dl.textContent = d;
         box.appendChild(dl);
       }
-      var t = new Date(h.ts);
-      var hh = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+      /* 注意：这里千万别写 var t —— 会遮蔽全局的翻译函数 t()，
+       * 导致同一作用域里的 t('title.replay') 抛 "t is not a function"。 */
+      var dt = new Date(h.ts);
+      var hh = String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
       var row = document.createElement('div');
       row.className = 'hist-item';
       row.appendChild(logoNode(h, 'hlogo'));
@@ -547,8 +549,8 @@
     var h = state.history.slice(0, 12);
     $('home-hist-empty').hidden = h.length > 0;
     h.forEach(function (item) {
-      var t = new Date(item.ts);
-      var hh = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+      var dt = new Date(item.ts);   // 同上：不要用 var t，会遮蔽翻译函数
+      var hh = String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0');
       var row = document.createElement('div');
       row.className = 'hist-item';
       row.appendChild(logoNode(item, 'hlogo'));
@@ -658,12 +660,12 @@
       });
       h.on(window.Hls.Events.ERROR, function (evt, data) {
         if (!data || !data.fatal) return;
-        var t = data.type;
-        if (t === window.Hls.ErrorTypes.NETWORK_ERROR) {
+        var etype = data.type;
+        if (etype === window.Hls.ErrorTypes.NETWORK_ERROR) {
           try { h.startLoad(); } catch (e) { finish(function () { reject(new Error('HLS_NETWORK')); }); }
           return;
         }
-        finish(function () { reject(new Error('HLS_' + (t || 'FATAL') + (data.details ? ':' + data.details : ''))); });
+        finish(function () { reject(new Error('HLS_' + (etype || 'FATAL') + (data.details ? ':' + data.details : ''))); });
       });
 
       h.loadSource(url);
@@ -889,14 +891,14 @@
   function bindTabs() {
     Array.prototype.forEach.call(document.querySelectorAll('[data-tab]'), function (b) {
       b.addEventListener('click', function () {
-        var t = b.dataset.tab;
-        if (t === 'search') { openSearch(); return; }
-        if (t === 'settings') { go('sources'); return; }
-        if (t === 'random') { randomPlay(); return; }
-        if (t === 'continue') { continueLast(); return; }
-        if (t === 'discover') { go('discover'); if (!discLoaded) doDiscover(); return; }
-        if (t === 'rb') { go('rb'); if (!rbLoaded) doRbBrowse(); return; }
-        go(t);
+        var tabId = b.dataset.tab;
+        if (tabId === 'search') { openSearch(); return; }
+        if (tabId === 'settings') { go('sources'); return; }
+        if (tabId === 'random') { randomPlay(); return; }
+        if (tabId === 'continue') { continueLast(); return; }
+        if (tabId === 'discover') { go('discover'); if (!discLoaded) doDiscover(); return; }
+        if (tabId === 'rb') { go('rb'); if (!rbLoaded) doRbBrowse(); return; }
+        go(tabId);
       });
     });
   }
@@ -1043,8 +1045,8 @@
       localStorage.setItem('jxr-vol', this.value);
     });
     document.addEventListener('keydown', function (e) {
-      var t = e.target.tagName;
-      if (e.code === 'Space' && t !== 'INPUT' && t !== 'SELECT' && t !== 'TEXTAREA') {
+      var tag = e.target.tagName;
+      if (e.code === 'Space' && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') {
         e.preventDefault(); toggle();
       }
     });
@@ -1243,7 +1245,9 @@
     api('/api/sources').then(function (j) {
       state.sources = j.sources || [];
       state.stations = j.stations || [];
-      renderAll();
+      /* 渲染异常单独兜住：接口成功了就不该报「后端连接失败」，
+       * 否则一个前端小错会被误报成后端挂了（曾经就踩过）。 */
+      try { renderAll(); } catch (err) { console.error('[renderAll]', err); }
     }).catch(function (e) {
       $('stat').textContent = t('toast.backendFail', e.message);
     });
