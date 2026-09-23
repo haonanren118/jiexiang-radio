@@ -6,6 +6,9 @@
 <title>杰翔电台 · jiexiang-radio</title>
 <link rel="stylesheet" href="/style.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>" />
+<!-- 先加载 i18n，让文案在首屏渲染前就按语言回填（避免中文一闪而过） -->
+<script src="/i18n.js"></script>
+<script>try { window.I18N.init(); } catch (e) { /* 极端情况下不影响页面可用 */ }</script>
 </head>
 <body data-view="grid">
 
@@ -13,30 +16,32 @@
   <div class="brand">
     <span class="logo">📻</span>
     <div>
-      <h1>杰翔电台</h1>
-      <p class="sub" id="stat">加载中…</p>
+      <h1 data-i18n="brand.name">杰翔电台</h1>
+      <p class="sub" id="stat" data-i18n="brand.loading">加载中…</p>
     </div>
   </div>
 
   <nav class="nav">
-    <button class="nav-item active" data-tab="home"><span class="nic">🏠</span>首页</button>
-    <button class="nav-item" data-tab="mine"><span class="nic">📺</span>我的电台</button>
-    <button class="nav-item" data-tab="rb"><span class="nic">🛰</span>RadioDroid</button>
-    <button class="nav-item" data-tab="fav"><span class="nic">♡</span>收藏</button>
-    <button class="nav-item" data-tab="history"><span class="nic">🕘</span>足迹</button>
+    <button class="nav-item active" data-tab="home"><span class="nic">🏠</span><span data-i18n="nav.home">首页</span></button>
+    <button class="nav-item" data-tab="mine"><span class="nic">📺</span><span data-i18n="nav.mine">我的电台</span></button>
+    <button class="nav-item" data-tab="rb"><span class="nic">🛰</span><span>RadioDroid</span></button>
+    <button class="nav-item" data-tab="fav"><span class="nic">♡</span><span data-i18n="nav.fav">收藏</span></button>
+    <button class="nav-item" data-tab="history"><span class="nic">🕘</span><span data-i18n="nav.history">足迹</span></button>
   </nav>
 
   <div class="topright">
-    <button class="icon-btn" data-tab="search" title="搜索电台">🔍</button>
+    <button class="icon-btn" data-tab="search" data-i18n-title="top.search" title="搜索电台">🔍</button>
     <div class="lang" id="lang-wrap">
-      <button type="button" class="lang-btn" id="btn-lang" aria-haspopup="menu" aria-expanded="false" title="切换语言">🌐 中文 <span class="caret">▾</span></button>
+      <button type="button" class="lang-btn" id="btn-lang" aria-haspopup="menu" aria-expanded="false" data-i18n-title="top.lang" title="切换语言">
+        <span id="lang-label">🌐 中文</span><span class="caret">▾</span>
+      </button>
       <div class="lang-menu" id="lang-menu" role="menu" hidden>
-        <button type="button" data-lang="zh-CN" role="menuitem">简体中文</button>
-        <button type="button" data-lang="en" role="menuitem" disabled>English · 敬请期待</button>
+        <button type="button" data-lang="zh-CN" role="menuitem" lang="zh-CN">简体中文</button>
+        <button type="button" data-lang="en" role="menuitem" lang="en">English</button>
       </div>
     </div>
-    <button class="icon-btn" id="btn-theme" title="切换主题"></button>
-    <button class="icon-btn" data-tab="settings" title="订阅源设置">⚙</button>
+    <button class="icon-btn" id="btn-theme" data-i18n-title="top.theme" title="切换主题"></button>
+    <button class="icon-btn" data-tab="settings" data-i18n-title="top.settings" title="订阅源设置">⚙</button>
   </div>
 </header>
 
@@ -45,51 +50,51 @@
   <!-- ============ 首页 ============ -->
   <section id="pane-home" class="pane active">
     <div class="hero-head">
-      <h2 id="home-title">聆听世界，音乐无界</h2>
-      <button class="icon-btn" id="btn-view" title="切换视图"></button>
+      <h2 id="home-title" data-i18n="home.title">聆听世界，音乐无界</h2>
+      <button class="icon-btn" id="btn-view" data-i18n-title="home.view" title="切换视图"></button>
     </div>
 
     <div class="hero-grid">
       <button class="hero-card primary" data-tab="random" id="hero-card">
         <span class="hibadge">↻</span>
-        <strong id="hero-label">随机发现</strong>
-        <span id="hero-sub">探索新电台</span>
+        <strong id="hero-label" data-i18n="hero.random">随机发现</strong>
+        <span id="hero-sub" data-i18n="hero.randomSub">探索新电台</span>
       </button>
       <button class="hero-card" data-tab="search">
         <span class="hicon c-teal">🔍</span>
-        <strong>搜索</strong>
-        <span>找到喜欢的</span>
+        <strong data-i18n="hero.search">搜索</strong>
+        <span data-i18n="hero.searchSub">找到喜欢的</span>
       </button>
       <button class="hero-card" data-tab="history">
         <span class="hicon c-amber">🕘</span>
-        <strong>足迹</strong>
-        <span>查看访问记录</span>
+        <strong data-i18n="hero.history">足迹</strong>
+        <span data-i18n="hero.historySub">查看访问记录</span>
       </button>
       <button class="hero-card" data-tab="fav">
         <span class="hicon c-rose">♥</span>
-        <strong>收藏</strong>
-        <span>收藏的电台</span>
+        <strong data-i18n="hero.fav">收藏</strong>
+        <span data-i18n="hero.favSub">收藏的电台</span>
       </button>
     </div>
 
     <section class="card">
       <div class="card-head">
-        <h3>我的电台</h3>
+        <h3 data-i18n="card.mine">我的电台</h3>
         <div class="head-tools"><span class="count-pill" id="home-mine-count"></span></div>
       </div>
       <div id="home-mine" class="grid home-grid"></div>
-      <div class="empty" id="home-empty" hidden>
+      <div class="empty" id="home-empty" data-i18n="home.empty" hidden>
         还没有电台。到「我的电台」页面添加订阅源，或直接手动添加单个电台。
       </div>
     </section>
 
     <section class="card">
       <div class="card-head">
-        <h3>最近收听</h3>
-        <button class="link-btn" data-tab="history">全部足迹 →</button>
+        <h3 data-i18n="card.recent">最近收听</h3>
+        <button class="link-btn" data-tab="history" data-i18n="link.allHistory">全部足迹 →</button>
       </div>
       <div id="home-hist" class="hist-strip"></div>
-      <div class="empty" id="home-hist-empty" hidden>还没有收听记录。</div>
+      <div class="empty" id="home-hist-empty" data-i18n="home.histEmpty" hidden>还没有收听记录。</div>
     </section>
   </section>
 
@@ -97,41 +102,41 @@
   <section id="pane-mine" class="pane">
     <section class="card">
       <div class="card-head">
-        <h3>我的电台</h3>
+        <h3 data-i18n="card.mine">我的电台</h3>
         <div class="head-tools"><span class="count-pill" id="mine-count"></span></div>
       </div>
 
       <div class="src-block">
-        <div class="block-title">🔗 M3U 订阅源</div>
+        <div class="block-title" data-i18n="src.section">🔗 M3U 订阅源</div>
         <div class="toolbar tight">
-          <input id="q-src" type="search" placeholder="搜索订阅源…" autocomplete="off" />
+          <input id="q-src" type="search" data-i18n-ph="src.searchPh" placeholder="搜索订阅源…" autocomplete="off" />
         </div>
         <div id="src-list" class="list"></div>
         <form class="formrow" data-role="source-form">
-          <input name="name" placeholder="源名称（可留空）" />
-          <input name="url" placeholder="https://…/index.m3u" required />
-          <button type="submit">添加源</button>
+          <input name="name" data-i18n-ph="src.addNamePh" placeholder="源名称（可留空）" />
+          <input name="url" data-i18n-ph="src.addUrlPh" placeholder="https://…/index.m3u" required />
+          <button type="submit" data-i18n="src.addBtn">添加源</button>
         </form>
       </div>
 
       <div class="src-block">
-        <div class="block-title">⊕ 手动添加 / 粘贴导入</div>
+        <div class="block-title" data-i18n="block.manual">⊕ 手动添加 / 粘贴导入</div>
         <form class="formrow" data-role="station-form">
-          <input name="name" placeholder="电台名称" />
-          <input name="url" placeholder="流地址 https://….mp3/.m3u8" required />
-          <button type="submit">添加</button>
+          <input name="name" data-i18n-ph="form.stNamePh" placeholder="电台名称" />
+          <input name="url" data-i18n-ph="form.stUrlPh" placeholder="流地址 https://….mp3/.m3u8" required />
+          <button type="submit" data-i18n="form.addBtn">添加</button>
         </form>
-        <textarea rows="3" data-role="paste"
+        <textarea rows="3" data-role="paste" data-i18n-ph="form.pastePh"
           placeholder="或直接粘贴 M3U 内容（支持 #EXTINF 格式），然后点「解析导入」"></textarea>
         <div class="formfoot">
-          <button type="button" class="ghost" data-role="import">解析导入</button>
-          <button type="button" class="ghost" data-role="export">⬇ 导出 M3U</button>
-          <button type="button" class="danger-text" data-role="clear">清空</button>
+          <button type="button" class="ghost" data-role="import" data-i18n="btn.import">解析导入</button>
+          <button type="button" class="ghost" data-role="export" data-i18n="btn.export">⬇ 导出 M3U</button>
+          <button type="button" class="danger-text" data-role="clear" data-i18n="btn.clear">清空</button>
         </div>
       </div>
 
       <div class="toolbar">
-        <input id="q-mine" type="search" placeholder="搜索电台名称 / 分组…" autocomplete="off" />
+        <input id="q-mine" type="search" data-i18n-ph="mine.searchPh" placeholder="搜索电台名称 / 分组…" autocomplete="off" />
       </div>
     </section>
 
@@ -141,7 +146,7 @@
 
     <div id="mine-list" class="grid st-grid"></div>
     <div id="list-mine" class="list st-list"></div>
-    <div class="empty" id="mine-empty" hidden>
+    <div class="empty" id="mine-empty" data-i18n="mine.empty" hidden>
       还没有电台。上面添加一个订阅源，或手动添加单个电台。
     </div>
   </section>
@@ -150,99 +155,99 @@
   <section id="pane-fav" class="pane">
     <section class="card">
       <div class="card-head">
-        <h3>♡ 我的收藏</h3>
+        <h3 data-i18n="fav.title">♡ 我的收藏</h3>
         <div class="head-tools"><span class="count-pill" id="fav-count"></span></div>
       </div>
-      <p class="hint">点电台卡片上的爱心即可收藏，收藏记录保存在本机浏览器。</p>
+      <p class="hint" data-i18n="fav.hint">点电台卡片上的爱心即可收藏，收藏记录保存在本机浏览器。</p>
     </section>
     <div id="fav-list" class="grid st-grid"></div>
     <div id="list-fav" class="list st-list"></div>
-    <div class="empty" id="fav-empty">还没有收藏任何电台。</div>
+    <div class="empty" id="fav-empty" data-i18n="fav.empty">还没有收藏任何电台。</div>
   </section>
 
   <!-- ============ 足迹 ============ -->
   <section id="pane-history" class="pane">
     <section class="card">
       <div class="card-head">
-        <h3>🕘 收听足迹</h3>
+        <h3 data-i18n="hist.title">🕘 收听足迹</h3>
         <div class="head-tools">
           <span class="count-pill" id="hist-count"></span>
-          <button type="button" id="btn-clear-hist" class="mini-btn danger">清空记录</button>
+          <button type="button" id="btn-clear-hist" class="mini-btn danger" data-i18n="hist.clear">清空记录</button>
         </div>
       </div>
     </section>
     <div id="hist-list" class="list"></div>
-    <div class="empty" id="hist-empty">还没有收听记录。</div>
+    <div class="empty" id="hist-empty" data-i18n="hist.empty">还没有收听记录。</div>
   </section>
 
   <!-- ============ 发现 ============ -->
   <section id="pane-discover" class="pane">
     <section class="card">
       <div class="card-head">
-        <h3>🌍 发现电台</h3>
+        <h3 data-i18n="disc.title">🌍 发现电台</h3>
         <div class="head-tools"><span class="count-pill" id="disc-count"></span></div>
       </div>
-      <p class="hint">数据来自 radio-browser（与 global-radio 同源），多个官方镜像自动容灾。</p>
+      <p class="hint" data-i18n="disc.hint">数据来自 radio-browser（与 global-radio 同源），多个官方镜像自动容灾。</p>
       <div class="searchbar">
-        <input id="q-disc" type="search" placeholder="搜索全球电台名（留空按热度）" autocomplete="off" />
+        <input id="q-disc" type="search" data-i18n-ph="disc.searchPh" placeholder="搜索全球电台名（留空按热度）" autocomplete="off" />
         <select id="country">
-          <option value="">按国家/地区</option>
-          <option value="CN" selected>中国 CN</option>
-          <option value="TW">中国台湾 TW</option>
-          <option value="HK">中国香港 HK</option>
-          <option value="JP">日本 JP</option>
-          <option value="KR">韩国 KR</option>
-          <option value="US">美国 US</option>
-          <option value="GB">英国 GB</option>
-          <option value="SG">新加坡 SG</option>
+          <option value="" data-i18n="country.ph">按国家/地区</option>
+          <option value="CN" selected data-i18n="country.cn">中国 CN</option>
+          <option value="TW" data-i18n="country.tw">中国台湾 TW</option>
+          <option value="HK" data-i18n="country.hk">中国香港 HK</option>
+          <option value="JP" data-i18n="country.jp">日本 JP</option>
+          <option value="KR" data-i18n="country.kr">韩国 KR</option>
+          <option value="US" data-i18n="country.us">美国 US</option>
+          <option value="GB" data-i18n="country.gb">英国 GB</option>
+          <option value="SG" data-i18n="country.sg">新加坡 SG</option>
         </select>
-        <button id="btn-disc">搜索</button>
+        <button id="btn-disc" data-i18n="btn.search">搜索</button>
       </div>
     </section>
     <div id="disc-list" class="grid st-grid"></div>
     <div id="list-disc" class="list st-list"></div>
-    <div class="empty" id="disc-empty">输入关键词或选择国家/地区后点搜索。</div>
+    <div class="empty" id="disc-empty" data-i18n="disc.empty">输入关键词或选择国家/地区后点搜索。</div>
   </section>
 
   <!-- ============ RadioDroid 全球电台 ============ -->
   <section id="pane-rb" class="pane">
     <section class="card">
       <div class="card-head">
-        <h3>🛰 RadioDroid 全球电台</h3>
+        <h3 data-i18n="rb.title">🛰 RadioDroid 全球电台</h3>
         <div class="head-tools"><span class="count-pill" id="rb-count"></span></div>
       </div>
-      <p class="hint">来自 RadioDroid（radio-browser.info）全量目录，持久内置。海量台不主动测通断（避免压垮 NAS），点击时按需验证连通性。</p>
+      <p class="hint" data-i18n="rb.hint">来自 RadioDroid（radio-browser.info）全量目录，持久内置。海量台不主动测通断（避免压垮 NAS），点击时按需验证连通性。</p>
       <div class="searchbar">
-        <input id="q-rb" type="search" placeholder="搜索全球电台名（留空按热度）" autocomplete="off" />
+        <input id="q-rb" type="search" data-i18n-ph="rb.searchPh" placeholder="搜索全球电台名（留空按热度）" autocomplete="off" />
         <select id="rb-country">
-          <option value="" selected>按国家/地区（全部）</option>
-          <option value="CN">中国 CN</option>
-          <option value="TW">中国台湾 TW</option>
-          <option value="HK">中国香港 HK</option>
-          <option value="JP">日本 JP</option>
-          <option value="KR">韩国 KR</option>
-          <option value="US">美国 US</option>
-          <option value="GB">英国 GB</option>
-          <option value="SG">新加坡 SG</option>
+          <option value="" selected data-i18n="country.all">按国家/地区（全部）</option>
+          <option value="CN" data-i18n="country.cn">中国 CN</option>
+          <option value="TW" data-i18n="country.tw">中国台湾 TW</option>
+          <option value="HK" data-i18n="country.hk">中国香港 HK</option>
+          <option value="JP" data-i18n="country.jp">日本 JP</option>
+          <option value="KR" data-i18n="country.kr">韩国 KR</option>
+          <option value="US" data-i18n="country.us">美国 US</option>
+          <option value="GB" data-i18n="country.gb">英国 GB</option>
+          <option value="SG" data-i18n="country.sg">新加坡 SG</option>
         </select>
-        <button id="btn-rb">搜索</button>
+        <button id="btn-rb" data-i18n="btn.search">搜索</button>
       </div>
     </section>
     <div id="rb-list" class="grid st-grid"></div>
     <div id="list-rb" class="list st-list"></div>
     <div class="formfoot" id="rb-more-wrap" hidden>
-      <button type="button" class="ghost" id="btn-rb-more">加载更多 ↓</button>
+      <button type="button" class="ghost" id="btn-rb-more" data-i18n="rb.loadMore">加载更多 ↓</button>
     </div>
-    <div class="empty" id="rb-empty" hidden>输入关键词或选择国家/地区后点搜索。</div>
+    <div class="empty" id="rb-empty" data-i18n="rb.empty" hidden>输入关键词或选择国家/地区后点搜索。</div>
   </section>
 
   <!-- ============ 订阅源设置 ============ -->
   <section id="pane-sources" class="pane">
     <section class="card">
       <div class="card-head">
-        <h3>⚙ 订阅源管理</h3>
+        <h3 data-i18n="sources.title">⚙ 订阅源管理</h3>
       </div>
-      <p class="hint">粘贴内容或填写 URL 都会自动识别格式，无需手动选择：</p>
+      <p class="hint" data-i18n="sources.hint">粘贴内容或填写 URL 都会自动识别格式，无需手动选择：</p>
       <div class="chipline">
         <span class="chip">M3U</span>
         <span class="chip">M3U8</span>
@@ -250,41 +255,41 @@
         <span class="chip">ASX</span>
         <span class="chip">XSPF</span>
         <span class="chip">JSON</span>
-        <span class="chip">纯文本每行一条</span>
+        <span class="chip" data-i18n="chip.perLine">纯文本每行一条</span>
       </div>
       <div class="src-block">
-        <div class="block-title">🔗 添加订阅源</div>
+        <div class="block-title" data-i18n="sources.addTitle">🔗 添加订阅源</div>
         <form class="formrow" data-role="source-form">
-          <input name="name" placeholder="源名称（可留空）" />
-          <input name="url" placeholder="https://…/index.m3u" required />
-          <button type="submit">添加源</button>
+          <input name="name" data-i18n-ph="src.addNamePh" placeholder="源名称（可留空）" />
+          <input name="url" data-i18n-ph="src.addUrlPh" placeholder="https://…/index.m3u" required />
+          <button type="submit" data-i18n="src.addBtn">添加源</button>
         </form>
-        <p class="hint tight">添加后会立刻拉取一次，解析出的电台自动进入「我的电台」。</p>
+        <p class="hint tight" data-i18n="sources.addHint">添加后会立刻拉取一次，解析出的电台自动进入「我的电台」。</p>
       </div>
 
       <div class="src-block">
-        <div class="block-title">⊕ 手动添加单个电台 / 粘贴导入</div>
+        <div class="block-title" data-i18n="sources.manualTitle">⊕ 手动添加单个电台 / 粘贴导入</div>
         <form class="formrow" data-role="station-form">
-          <input name="name" placeholder="电台名称" />
-          <input name="url" placeholder="流地址 https://….mp3/.m3u8" required />
-          <button type="submit">添加</button>
+          <input name="name" data-i18n-ph="form.stNamePh" placeholder="电台名称" />
+          <input name="url" data-i18n-ph="form.stUrlPh" placeholder="流地址 https://….mp3/.m3u8" required />
+          <button type="submit" data-i18n="form.addBtn">添加</button>
         </form>
-        <textarea rows="3" data-role="paste"
+        <textarea rows="3" data-role="paste" data-i18n-ph="form.pastePh"
           placeholder="或直接粘贴 M3U 内容（支持 #EXTINF 格式），然后点「解析导入」"></textarea>
         <div class="formfoot">
-          <button type="button" class="ghost" data-role="import">解析导入</button>
-          <button type="button" class="ghost" data-role="export">⬇ 导出 M3U</button>
-          <button type="button" class="danger-text" data-role="clear">清空全部电台</button>
+          <button type="button" class="ghost" data-role="import" data-i18n="btn.import">解析导入</button>
+          <button type="button" class="ghost" data-role="export" data-i18n="btn.export">⬇ 导出 M3U</button>
+          <button type="button" class="danger-text" data-role="clear" data-i18n="btn.clearAll">清空全部电台</button>
         </div>
       </div>
     </section>
     <section class="card">
       <div class="card-head">
-        <h3>当前订阅源</h3>
+        <h3 data-i18n="sources.current">当前订阅源</h3>
         <div class="head-tools"><span class="count-pill" id="src-count"></span></div>
       </div>
       <div id="src-list-full" class="list"></div>
-      <div class="empty" id="src-empty" hidden>还没有订阅源。</div>
+      <div class="empty" id="src-empty" data-i18n="sources.empty" hidden>还没有订阅源。</div>
     </section>
   </section>
 
@@ -295,15 +300,15 @@
   <div class="np">
     <span class="np-art" id="np-art"></span>
     <div class="np-txt">
-      <strong id="np-name">未在播放</strong>
-      <span id="np-meta">选一个电台开始收听</span>
-      <button id="btn-src" class="src-btn" hidden>🔀 <span id="np-srcn">1</span> 个源</button>
+      <strong id="np-name" data-i18n="player.idle">未在播放</strong>
+      <span id="np-meta" data-i18n="player.hint">选一个电台开始收听</span>
+      <button id="btn-src" class="src-btn" hidden>🔀 <span id="np-srcn">1</span> <span data-i18n="src.countSuffix">个源</span></button>
       <span class="np-status" id="np-sub"></span>
     </div>
   </div>
   <div class="ctrls">
-    <button id="btn-play" title="播放/暂停">▶</button>
-    <input id="vol" type="range" min="0" max="100" value="80" title="音量" />
+    <button id="btn-play" data-i18n-title="player.playPause" title="播放/暂停">▶</button>
+    <input id="vol" type="range" min="0" max="100" value="80" data-i18n-title="player.volume" title="音量" />
   </div>
 </footer>
 

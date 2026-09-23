@@ -43,6 +43,7 @@ FILES = [
     "public/index.html",
     "public/style.css",
     "public/app.js",
+    "public/i18n.js",
     "public/vendor/hls.min.js",
 ]
 import glob as _glob

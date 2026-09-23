@@ -2612,11 +2612,19 @@ function serveStatic(req, res, pathname) {
       return;
     }
     const ext = path.extname(full).toLowerCase();
-    res.writeHead(200, {
-      'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=300'
+    /* 原来 JS/CSS 是 public, max-age=300 —— 部署新版后浏览器还拿着 5 分钟前的旧脚本，
+     * 用户会以为「改了没生效」（i18n 这类纯前端改动最容易踩）。改成 ETag 协商缓存：
+     * 每次请求都回服务端问一下，内容没变回 304（几乎零开销），变了立刻生效。 */
+    fs.stat(full, (se, st) => {
+      const tag = 'W/"' + data.length.toString(16) + '-' + (se ? 0 : Math.floor(st.mtimeMs)).toString(16) + '"';
+      if (req.headers['if-none-match'] === tag) return res.writeHead(304, { ETag: tag }).end();
+      res.writeHead(200, {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+        'Cache-Control': ext === '.html' ? 'no-store' : 'no-cache',
+        ETag: tag
+      });
+      res.end(data);
     });
-    res.end(data);
   });
 }
 

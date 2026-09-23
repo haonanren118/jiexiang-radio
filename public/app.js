@@ -17,6 +17,16 @@
   var themeMode = localStorage.getItem('jxr-theme') || 'auto';
 
   /* ---------------------------------------------------------------- *
+   * 多语言
+   * t(key)   —— 界面文案（词表在 i18n.js）
+   * td(v)    —— 显示层翻译：内置源名 / 国别 / 占位名等「库里存的中文数据」，
+   *             只在渲染时换语言，不回写数据库，避免污染已入库的数据
+   * ---------------------------------------------------------------- */
+  var I18N = window.I18N;
+  var t = window.t;
+  function td(v) { return I18N.msg(v); }
+
+  /* ---------------------------------------------------------------- *
    * 工具
    * ---------------------------------------------------------------- */
   function enc(s) { return encodeURIComponent(s); }
@@ -103,9 +113,9 @@
   function dayKey(ts) {
     var d = new Date(ts), n = new Date();
     var k = function (x) { return x.getFullYear() + '-' + (x.getMonth() + 1) + '-' + x.getDate(); };
-    if (k(d) === k(n)) return '今天';
+    if (k(d) === k(n)) return t('day.today');
     n.setDate(n.getDate() - 1);
-    if (k(d) === k(n)) return '昨天';
+    if (k(d) === k(n)) return t('day.yesterday');
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
@@ -143,20 +153,19 @@
   function applyTheme() {
     document.documentElement.dataset.theme = themeMode;
     $('btn-theme').innerHTML = ico(themeMode === 'dark' ? 'sun' : 'moon');
-    $('btn-theme').title = themeMode === 'dark' ? '切换到浅色' : '切换到深色';
+    $('btn-theme').title = themeMode === 'dark' ? t('title.themeLight') : t('title.themeDark');
   }
   function applyView() {
     document.body.dataset.view = viewMode;
     $('btn-view').innerHTML = ico(viewMode === 'grid' ? 'list' : 'grids');
-    $('btn-view').title = viewMode === 'grid' ? '切换列表视图' : '切换网格视图';
+    $('btn-view').title = viewMode === 'grid' ? t('title.viewList') : t('title.viewGrid');
   }
 
   /* ---------------------------------------------------------------- *
    * 渲染
    * ---------------------------------------------------------------- */
   function renderStatus() {
-    $('stat').textContent = '共 ' + state.stations.length + ' 个电台 · ' +
-      state.sources.length + ' 个订阅源';
+    $('stat').textContent = t('count.summary', state.stations.length, state.sources.length);
   }
 
   function go(t) {
@@ -175,7 +184,7 @@
 
   function heroTitle() {
     var n = state.history.length ? state.history[0] : null;
-    return n ? '继续收听，' + n.name : '聆听世界，音乐无界';
+    return n ? t('hero.continue') + ' · ' + n.name : t('home.title');
   }
 
   function renderHero() {
@@ -188,17 +197,17 @@
     hero.disabled = false;
     hero.classList.remove('disabled');
     hero.dataset.tab = need ? 'continue' : 'random';
-    $('hero-label').textContent = need ? '继续收听' : '随机发现';
+    $('hero-label').textContent = need ? t('hero.continue') : t('hero.random');
     $('hero-sub').textContent = need
-      ? '上次听到「' + state.history[0].name + '」，点击接着听'
-      : '从 ' + state.stations.length + ' 个电台里随便挑一个开始';
+      ? t('hero.continueSub', state.history[0].name)
+      : t('hero.randomSub', state.stations.length);
   }
 
   /** 首页大卡片：有收听记录就续播上一条 */
   function continueLast() {
     var last = state.history[0];
     if (!last) return randomPlay();
-    toast('继续收听：' + last.name);
+    toast(t('toast.continue', last.name));
     play(last);
   }
 
@@ -297,23 +306,23 @@
     el.className = 'card station' + (current && current.id === st.id ? ' playing' : '');
     var sub = [];
     if (st.group) sub.push(st.group);
-    if (st.country) sub.push(st.country);
+    if (st.country) sub.push(td(st.country));
     if (st.countryCode && !st.country) sub.push(st.countryCode);
-    if (st.sourceName && opts.showSource !== false) sub.push(st.sourceName);
+    if (st.sourceName && opts.showSource !== false) sub.push(td(st.sourceName));
     if (st.bitrate) sub.push((st.codec || '') + ' ' + st.bitrate + 'k');
     var head = document.createElement('div');
     head.className = 'shead';
     head.appendChild(logoNode(st, 'slogo'));
     head.insertAdjacentHTML('beforeend',
       '<div class="stitle"><strong>' + esc(st.name) + '</strong>' +
-      (st.poolCount > 1 ? '<em class="srcbadge" title="' + st.poolCount + ' 个播放源可用">🔗' + st.poolCount + '</em>' : '') +
+      (st.poolCount > 1 ? '<em class="srcbadge" title="' + esc(t('tip.poolCount', st.poolCount)) + '">🔗' + st.poolCount + '</em>' : '') +
       '<span>' + esc(sub.join(' · ')) + '</span></div>');
     el.appendChild(head);
     el.insertAdjacentHTML('beforeend',
       '<div class="sactions">' +
-      (opts.noFav ? '' : '<button data-act="fav" class="icon-btn" title="收藏">' + ico('heart') + '</button>') +
-      (opts.canDelete ? '<button data-act="rm" class="icon-btn" title="删除">' + ico('trash') + '</button>' : '') +
-      '<button data-act="play" class="play-btn" title="播放">' + ico('play') + '</button>' +
+      (opts.noFav ? '' : '<button data-act="fav" class="icon-btn" title="' + esc(t('title.fav')) + '">' + ico('heart') + '</button>') +
+      (opts.canDelete ? '<button data-act="rm" class="icon-btn" title="' + esc(t('title.del')) + '">' + ico('trash') + '</button>' : '') +
+      '<button data-act="play" class="play-btn" title="' + esc(t('title.play')) + '">' + ico('play') + '</button>' +
       '</div>');
     if (fav) el.querySelector('[data-act="fav"]').classList.add('on');
     el.querySelector('[data-act="play"]').onclick = function (e) { e.stopPropagation(); play(st); };
@@ -322,14 +331,14 @@
     if (fb) fb.onclick = function (e) {
       e.stopPropagation();
       toggleFav(st.id);
-      toast(isFav(st.id) ? '已收藏' : '已取消收藏');
+      toast(isFav(st.id) ? t('toast.favOn') : t('toast.favOff'));
       renderAll();
     };
     var rb = el.querySelector('[data-act="rm"]');
     if (rb) rb.onclick = function (e) {
       e.stopPropagation();
       del('/api/stations?id=' + enc(st.id)).then(function (j) {
-        state.stations = j.stations; renderAll(); toast('已删除');
+        state.stations = j.stations; renderAll(); toast(t('toast.deleted'));
       });
     };
     return el;
@@ -346,8 +355,9 @@
   function renderMine() {
     var kw = filterText.mine;
     var cat = filterCat.mine;
+    var ungrouped = t('group.ungrouped');
     var arr = state.stations.filter(function (s) {
-      if (cat && (s.group || '未分组') !== cat) return false;
+      if (cat && (s.group || ungrouped) !== cat) return false;
       return matches(s, kw);
     });
     var grid = $('mine-list'), list = $('list-mine');
@@ -357,10 +367,10 @@
       list.appendChild(stationCard(st, { canDelete: true }));
     });
     $('mine-empty').hidden = arr.length > 0 || state.stations.length > 0;
-    $('mine-count').textContent = (cat ? '分类「' + cat + '」 ' : '')
+    $('mine-count').textContent = (cat ? t('count.cat', cat) : '')
       + (kw
-        ? '筛选出 ' + arr.length + ' / 共 ' + state.stations.length + ' 个电台'
-        : '共 ' + state.stations.length + ' 个电台 · ' + state.sources.length + ' 个订阅源');
+        ? t('count.filtered', arr.length, state.stations.length)
+        : t('count.summary', state.stations.length, state.sources.length));
     buildCatChips();
   }
 
@@ -368,14 +378,15 @@
   function buildCatChips() {
     var bar = $('cat-chips');
     if (!bar) return;
+    var ungrouped = t('group.ungrouped');
     var counts = {};
     state.stations.forEach(function (s) {
-      var g = s.group || '未分组';
+      var g = s.group || ungrouped;
       counts[g] = (counts[g] || 0) + 1;
     });
     var cats = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; });
     bar.innerHTML = '';
-    bar.appendChild(catChip('全部', state.stations.length, ''));
+    bar.appendChild(catChip(t('cat.all'), state.stations.length, ''));
     cats.forEach(function (c) { bar.appendChild(catChip(c, counts[c], c)); });
   }
 
@@ -392,7 +403,7 @@
     var set = {};
     state.stations.forEach(function (s) { set[s.id] = s; });
     var arr = state.favorites.map(function (id) { return set[id]; }).filter(Boolean);
-    $('fav-count').textContent = '共 ' + arr.length + ' 个电台';
+    $('fav-count').textContent = t('count.stations', arr.length);
     $('fav-empty').hidden = arr.length > 0;
     var grid = $('fav-list'), list = $('list-fav');
     grid.innerHTML = ''; list.innerHTML = '';
@@ -405,7 +416,7 @@
   function renderHistory() {
     var box = $('hist-list');
     box.innerHTML = '';
-    $('hist-count').textContent = '共 ' + state.history.length + ' 条记录';
+    $('hist-count').textContent = t('count.records', state.history.length);
     var clearBtn = $('btn-clear-hist');
     if (clearBtn) clearBtn.disabled = state.history.length === 0;
     $('hist-empty').hidden = state.history.length > 0;
@@ -426,9 +437,9 @@
       row.appendChild(logoNode(h, 'hlogo'));
       row.insertAdjacentHTML('beforeend',
         '<div class="hmeta"><strong>' + esc(h.name) + '</strong>'
-        + '<span>' + esc([h.group, h.sourceName].filter(Boolean).join(' · ')) + '</span></div>'
+        + '<span>' + esc([h.group, td(h.sourceName)].filter(Boolean).join(' · ')) + '</span></div>'
         + '<time>' + hh + '</time>'
-        + '<button data-a="play" class="play-btn" title="再听一次">' + ico('play') + '</button>');
+        + '<button data-a="play" class="play-btn" title="' + esc(t('title.replay')) + '">' + ico('play') + '</button>');
       row.querySelector('[data-a="play"]').onclick = function () { play(h); };
       row.querySelector('.hmeta').onclick = function () { play(h); };
       box.appendChild(row);
@@ -438,7 +449,7 @@
   function renderSources() {
     var boxes = [$('src-list'), $('src-list-full')].filter(Boolean);
     var countEl = $('src-count');
-    if (countEl) countEl.textContent = state.sources.length ? state.sources.length + ' 个' : '';
+    if (countEl) countEl.textContent = state.sources.length ? t('src.countN', state.sources.length) : '';
     var emptyEl = $('src-empty');
     if (emptyEl) emptyEl.hidden = state.sources.length > 0;
 
@@ -446,7 +457,7 @@
       box.innerHTML = '';
       if (!state.sources.length) {
         if (box.id === 'src-list') {
-          box.innerHTML = '<div class="empty">还没有订阅源。用下面的输入框加一个 m3u / pls / xspf 列表试试。</div>';
+          box.innerHTML = '<div class="empty">' + esc(t('src.inlineEmpty')) + '</div>';
         }
         return;
       }
@@ -460,36 +471,39 @@
     var row = document.createElement('div');
     row.className = 'src-item';
     row.dataset.name = (src.name || '').toLowerCase();
+    var loadState = src.count
+      ? t('count.stations', src.count)
+      : (src.error ? '<b class="err">' + esc(I18N.msg(src.error)) + '</b>' : t('src.notLoaded'));
     row.innerHTML =
-      '<div class="toggle' + (src.enabled === false ? '' : ' on') + '" data-a="en" title="启用/停用"></div>' +
-      '<div class="rmeta"><strong>' + esc(src.name) + '</strong>' +
+      '<div class="toggle' + (src.enabled === false ? '' : ' on') + '" data-a="en" title="' + esc(t('title.toggleSrc')) + '"></div>' +
+      '<div class="rmeta"><strong>' + esc(td(src.name)) + '</strong>' +
       '<span class="url">' + esc(src.url) + '</span>' +
       '<span class="rmeta-sub">' +
-      (src.count ? src.count + ' 个电台' : (src.error ? '<b class="err">' + esc(src.error) + '</b>' : '尚未加载')) +
+      loadState +
       (src.lastLoad ? ' · ' + esc(fmtTs(src.lastLoad)) : '') +
       '</span></div>' +
       '<div class="sactions">' +
-      '<button data-a="refresh" class="icon-btn" title="重新拉取">' + ico('refresh') + '</button>' +
-      '<button data-a="del" class="icon-btn danger" title="删除">' + ico('trash') + '</button>' +
+      '<button data-a="refresh" class="icon-btn" title="' + esc(t('title.reloadSrc')) + '">' + ico('refresh') + '</button>' +
+      '<button data-a="del" class="icon-btn danger" title="' + esc(t('title.del')) + '">' + ico('trash') + '</button>' +
       '</div>';
 
     var tg = row.querySelector('[data-a="en"]');
     tg.onclick = function () {
       src.enabled = src.enabled === false;
       tg.classList.toggle('on', src.enabled !== false);
-      toast(src.enabled === false ? '已停用（仅本地标记）' : '已启用');
+      toast(src.enabled === false ? t('toast.srcOff') : t('toast.srcOn'));
     };
     row.querySelector('[data-a="refresh"]').onclick = function () {
-      toast('正在拉取…');
+      toast(t('toast.srcLoading'));
       post('/api/sources/refresh', { id: src.id }).then(function (j) {
         state.sources = j.sources; state.stations = j.stations;
-        renderAll(); toast('已刷新');
-      }).catch(function (e) { toast(String(e.message), true); });
+        renderAll(); toast(t('toast.srcRefreshed'));
+      }).catch(function (e) { toast(I18N.msg(String(e.message)), true); });
     };
     row.querySelector('[data-a="del"]').onclick = function () {
       del('/api/sources?id=' + enc(src.id)).then(function (j) {
         state.sources = j.sources; state.stations = j.stations;
-        renderAll(); toast('已删除');
+        renderAll(); toast(t('toast.deleted'));
       });
     };
     return row;
@@ -505,7 +519,7 @@
     var grid = $('disc-list'), lst = $('list-disc');
     grid.innerHTML = ''; if (lst) lst.innerHTML = '';
     $('disc-empty').hidden = list.length > 0;
-    $('disc-count').textContent = list.length ? '共 ' + list.length + ' 个电台' : '';
+    $('disc-count').textContent = list.length ? t('count.stations', list.length) : '';
     list.forEach(function (st) {
       grid.appendChild(stationCard(st, {}));
       if (lst) lst.appendChild(stationCard(st, {}));
@@ -525,7 +539,7 @@
     grid.innerHTML = '';
     var top = state.stations.slice(0, 8);
     top.forEach(function (st) { grid.appendChild(stationCard(st, { canDelete: true })); });
-    $('home-mine-count').textContent = '共 ' + state.stations.length + ' 个电台';
+    $('home-mine-count').textContent = t('count.stations', state.stations.length);
     $('home-empty').hidden = state.stations.length > 0;
 
     var box = $('home-hist');
@@ -540,9 +554,9 @@
       row.appendChild(logoNode(item, 'hlogo'));
       row.insertAdjacentHTML('beforeend',
         '<div class="hmeta"><strong>' + esc(item.name) + '</strong>'
-        + '<span>' + esc([dayKey(item.ts), item.sourceName].filter(Boolean).join(' · ')) + '</span></div>'
+        + '<span>' + esc([dayKey(item.ts), td(item.sourceName)].filter(Boolean).join(' · ')) + '</span></div>'
         + '<time>' + hh + '</time>'
-        + '<button data-a="play" class="play-btn" title="再听一次">' + ico('play') + '</button>');
+        + '<button data-a="play" class="play-btn" title="' + esc(t('title.replay')) + '">' + ico('play') + '</button>');
       row.querySelector('[data-a="play"]').onclick = function () { play(item); };
       row.querySelector('.hmeta').onclick = function () { play(item); };
       box.appendChild(row);
@@ -565,7 +579,7 @@
     audio.volume = (parseFloat(localStorage.getItem('jxr-vol') || '80') || 80) / 100;
     audio.addEventListener('playing', function () { setPlaying(true); });
     audio.addEventListener('pause', function () { setPlaying(false); });
-    audio.addEventListener('waiting', function () { setSub('缓冲中…'); });
+    audio.addEventListener('waiting', function () { setSub('play.buffering'); });
     audio.addEventListener('error', function () { /* 由 tryXxx 的超时/错误逻辑处理 */ });
     return audio;
   }
@@ -582,13 +596,25 @@
   function setPlaying(p) {
     playing = p;
     $('btn-play').innerHTML = ico(p ? 'pauseS' : 'play');
-    if (p && current) setSub('正在播放');
+    if (p && current) setSub('play.playing');
   }
-  function setSub(t) { $('np-sub').textContent = t; }
-  function setSubStatus(t, ok) {
+  /* 状态栏：不存成品文本，只存「词条 key + 参数」，切语言时才能就地重放换语言 */
+  var subState = null;
+  function setSub(key, a, b) {
+    subState = (key == null) ? null : { kind: 'text', key: key, args: [a, b] };
+    paintSub();
+  }
+  function setSubStatus(key, ok, a, b) {
+    subState = (key == null) ? null : { kind: 'status', key: key, ok: !!ok, args: [a, b] };
+    paintSub();
+  }
+  function paintSub() {
     var el = $('np-sub');
-    el.innerHTML = ico(ok ? 'wifi' : 'refresh') + '<span>' + esc(t) + '</span>';
-    el.className = 'np-status' + (ok ? ' ok' : '');
+    if (!subState) { el.textContent = ''; el.className = 'np-status'; return; }
+    var txt = t.apply(null, [subState.key].concat(subState.args));
+    if (subState.kind === 'text') { el.textContent = txt; return; }
+    el.innerHTML = ico(subState.ok ? 'wifi' : 'refresh') + '<span>' + esc(txt) + '</span>';
+    el.className = 'np-status' + (subState.ok ? ' ok' : '');
   }
 
   /** 用 hls.js 播一个已代理的 m3u8 */
@@ -673,7 +699,7 @@
 
   function setNowPlaying(st, msg) {
     current = st;
-    $('np-name').textContent = st ? st.name : '未在播放';
+    $('np-name').textContent = st ? st.name : t('player.idle');
 
     var host = $('np-art');
     host.innerHTML = '';
@@ -687,8 +713,8 @@
       host.appendChild(ph);
     }
 
-    var meta = st ? [st.sourceName || st.country, st.group].filter(Boolean).join(' · ') : '';
-    $('np-meta').textContent = meta || (st ? '电台' : '选一个电台开始收听');
+    var meta = st ? [td(st.sourceName || st.country), st.group].filter(Boolean).join(' · ') : '';
+    $('np-meta').textContent = meta || (st ? t('player.station') : t('player.hint'));
     var sb = $('btn-src');
     if (sb) {
       var n = (st && st.poolCount) || (st && st.sources ? st.sources.length : 0);
@@ -720,7 +746,7 @@
 
     stopAll();
     pushHistory(st);
-    setNowPlaying(st, '连接中');
+    setNowPlaying(st, 'play.connecting');
     setPlaying(false);
 
     var si = 0;   // 当前尝试到第几个源
@@ -728,35 +754,36 @@
       if (myToken !== playToken) return;            // 已切台，放弃整条回退链
       if (si >= urls.length) {
         setNowPlaying(st);
-        setSubStatus('无法播放（试试换个源）', false);
-        toast('无法播放：' + st.name, true);
+        setSubStatus('play.cantPlayShort', false);
+        toast(t('play.cantPlay', st.name), true);
         return;
       }
       var u = urls[si++];
-      var label = urls.length > 1 ? ('源' + si + '/' + urls.length + ' · ') : '';
+      var label = urls.length > 1 ? t('play.srcIndex', si, urls.length) : '';
       var chain = [];
       if (isHls(u)) {
-        chain.push({ name: 'HLS 代理', run: function () { return playHls(hlsSrc(u, st.referer)); } });
-        chain.push({ name: '原生 HLS', run: function () { return playNative(hlsSrc(u, st.referer)); } });
+        chain.push({ nameKey: 'chain.hlsProxy', run: function () { return playHls(hlsSrc(u, st.referer)); } });
+        chain.push({ nameKey: 'chain.nativeHls', run: function () { return playNative(hlsSrc(u, st.referer)); } });
       }
-      chain.push({ name: '直连代理', run: function () { return playNative(proxySrc(u, st.referer)); } });
+      chain.push({ nameKey: 'chain.directProxy', run: function () { return playNative(proxySrc(u, st.referer)); } });
       var ci = 0;
       function next() {
         if (myToken !== playToken) return;          // 已切台，忽略
         if (ci >= chain.length) { tryUrl(); return; }   // 当前源所有方式都失败 → 试下一个源
         var step = chain[ci++];
+        var stepName = t(step.nameKey);
         stopAll();
-        setSubStatus('正在连接 · ' + label + step.name, false);
+        setSubStatus('play.connectingChain', false, label, stepName);
         step.run().then(function () {
           if (myToken !== playToken) return;
           st.manualUrl = u;   // 记下实际在播的源，菜单高亮
           setNowPlaying(st);
-          setSubStatus('正在播放 · ' + step.name, true);
+          setSubStatus('play.playingChain', true, stepName);
           setPlaying(true);
           refreshCurrentViews();
         }).catch(function (e) {
           if (myToken !== playToken) return;
-          console.warn('[jiexiang-radio] ' + label + step.name + ' 失败：', e && e.message);
+          console.warn('[jiexiang-radio] ' + label + stepName + ' 失败：', e && e.message);
           next();
         });
       }
@@ -772,7 +799,7 @@
     // 兜底：万一这台还没建源池（老数据 / 刚入库），至少给出它自己的当前源，
     // 菜单不能只剩一个标题。
     if (!list.length && st.url) {
-      list = [{ url: st.url, from: st.sourceName || '主源', ok: null, latency: null, dead: false }];
+      list = [{ url: st.url, from: t('src.primary'), ok: null, latency: null, dead: false }];
     }
     // 排序：可用（按延迟升序）→ RadioDroid 备用源（按来源名稳定排序）→ 死链
     // 旧版对「全部是备用源」的台返回 0（latency 都是 1e9），顺序退化为插入序，看起来像没排序。
@@ -796,23 +823,23 @@
       return st.url;
     }
     var useUrl = willUse();
-    var html = '<div class="srcmenu-h">播放源（绿=可放 · 红=死链 · 蓝=RadioDroid 备用源，点播时按需验证）</div>';
+    var html = '<div class="srcmenu-h">' + esc(t('srcmenu.title')) + '</div>';
     // 整台都只有 RadioDroid 备用源时，给一句说明，避免误以为「源没测」是 bug
     if (srcs.length && srcs.every(function (x) { return x.noProbe; })) {
-      html += '<div class="srcmenu-note">此台全部为 RadioDroid 备用源，未提前测通断（避免上万条流地址压垮 NAS）。点播时会自动验证，连不上顺延下一个。</div>';
+      html += '<div class="srcmenu-note">' + esc(t('srcmenu.allBackup')) + '</div>';
     }
     srcs.forEach(function (x, i) {
       var isCur = (x.url === cur);
       var isUse = (x.url === useUrl);
       var statCls, statTxt;
-      if (x.ok === false || x.dead) { statCls = 'dead'; statTxt = '死链'; }
-      else if (x.ok) { statCls = 'ok'; statTxt = (x.latency != null ? (x.latency + 'ms') : '可放'); }
-      else if (x.noProbe) { statCls = 'bk'; statTxt = '备用·点播验证'; }
-      else { statCls = ''; statTxt = '未测'; }
-      var tag = isUse ? '<span class="srci-use">▶ 将使用</span>' : '';
+      if (x.ok === false || x.dead) { statCls = 'dead'; statTxt = t('stat.dead'); }
+      else if (x.ok) { statCls = 'ok'; statTxt = (x.latency != null ? (x.latency + 'ms') : t('stat.playable')); }
+      else if (x.noProbe) { statCls = 'bk'; statTxt = t('stat.backup'); }
+      else { statCls = ''; statTxt = t('stat.untested'); }
+      var tag = isUse ? '<span class="srci-use">' + esc(t('srcmenu.willUse')) + '</span>' : '';
       html += '<button class="srci' + (isCur ? ' cur' : '') + (isUse ? ' use' : '') + '" data-u="' + esc(x.url) + '">' +
         '<span class="srci-rank">' + (i + 1) + '</span>' +
-        '<span class="srci-from">' + esc(x.from || '源') + '</span>' +
+        '<span class="srci-from">' + esc(td(x.from) || t('src.generic')) + '</span>' +
         tag +
         '<span class="srci-stat ' + statCls + '">' + statTxt + '</span></button>';
     });
@@ -852,7 +879,7 @@
     var el = ensureAudio();
     if (!current) return;
     if (playing) { el.pause(); setPlaying(false); }
-    else if (el.src) { el.play().catch(function (e) { toast('播放被浏览器拦截：' + (e.message || e), true); }); }
+    else if (el.src) { el.play().catch(function (e) { toast(t('play.blocked', e.message || e), true); }); }
     else { play(current); }
   }
 
@@ -881,9 +908,9 @@
 
   function randomPlay() {
     var pool = state.stations.slice();
-    if (!pool.length) return toast('还没有电台，先加个订阅源', true);
+    if (!pool.length) return toast(t('toast.noStation'), true);
     var st = pool[Math.floor(Math.random() * pool.length)];
-    toast('随机发现：' + st.name);
+    toast(t('toast.random', st.name));
     play(st);
   }
 
@@ -901,26 +928,24 @@
     });
   }
 
-  /** 语言切换：当前只有中文可用，英文标了「敬请期待」并禁用。
-   *  但下拉必须能点开、能选、能关（点外部 / Esc）。这是上一轮用户反馈
-   *  「语言也只有中文点击没有反应」的根因——之前那只是个静态 div，没绑定任何事件。 */
+  /** 语言切换：简体中文 / English 双向下拉。
+   *  下拉必须能点开、能选、能关（点外部 / Esc）——之前那只是个静态 div，没绑定任何事件。 */
   function bindLang() {
     var btn = $('btn-lang');
     var menu = $('lang-menu');
+    var label = $('lang-label');
     if (!btn || !menu) return;
-    var lang = localStorage.getItem('jxr-lang') || 'zh-CN';
 
-    function labelOf(code) {
-      if (code === 'en') return 'English';
-      return '简体中文';
-    }
+    /* 语言名一律用「本族语写法」（简体中文 / English），不跟着界面语言翻译，
+     * 否则英文界面下中文选项会变成 Chinese，用户反而认不出来。 */
+    function nativeName(code) { return code === 'en' ? 'English' : '简体中文'; }
+    function shortName(code) { return code === 'en' ? 'English' : '中文'; }
+
     function syncLabel() {
-      // 按钮里有「🌐 中文 」文本节点 + 一个 .caret span，只改文本节点
-      if (btn.firstChild && btn.firstChild.nodeType === 3) {
-        btn.firstChild.textContent = '🌐 ' + labelOf(lang) + ' ';
-      }
+      var cur = I18N.get();
+      if (label) label.textContent = '🌐 ' + shortName(cur);
       qa('[data-lang]', menu).forEach(function (b) {
-        b.classList.toggle('on', b.dataset.lang === lang && !b.disabled);
+        b.classList.toggle('on', b.dataset.lang === cur);
       });
     }
     function open() { menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); syncLabel(); }
@@ -931,12 +956,13 @@
 
     qa('[data-lang]', menu).forEach(function (b) {
       b.addEventListener('click', function () {
-        if (b.disabled) return;                 // English：敬请期待，点了不生效
-        lang = b.dataset.lang;
-        localStorage.setItem('jxr-lang', lang);
+        var next = b.dataset.lang;
+        if (next === I18N.get()) { close(); return; }
+        I18N.set(next);        // 落盘 + 回填静态文案
         syncLabel();
         close();
-        toast('语言已切换为：' + labelOf(lang));
+        resyncDynamicText();   // 重建 JS 渲染出来的部分
+        toast(t('lang.switched', nativeName(next)));
       });
     });
 
@@ -944,6 +970,18 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
 
     syncLabel();
+  }
+
+  /** 语言切换后重放动态内容：静态 HTML 已由 I18N.set() 回填，
+   *  这里只补 JS 渲染出来的部分（统计、卡片、分类、源列表、播放器状态）。 */
+  function resyncDynamicText() {
+    // 分类 chip 里的「未分组」文案随语言变，旧的筛选值会失配，直接重置
+    filterCat.mine = '';
+    renderAll();
+    if (state.stations.length === 0) renderSources();   // 空态文案也要换语言
+    applyTheme();
+    applyView();
+    paintSub();
   }
 
   function bindForms() {
@@ -983,11 +1021,11 @@
 
     $('btn-clear-hist').addEventListener('click', function () {
       if (!state.history.length) return;
-      if (!confirm('确定清空收听记录吗？')) return;
+      if (!confirm(t('hist.confirm'))) return;
       state.history = [];
       localStorage.setItem('jxr-hist', '[]');
       renderHistory(); renderHero();
-      toast('已清空记录');
+      toast(t('toast.histCleared'));
     });
 
     $('btn-disc').addEventListener('click', doDiscover);
@@ -1026,15 +1064,15 @@
       url: (el.namedItem('url').value || '').trim(),
       sourceName: '手动添加'
     };
-    if (!/^https?:\/\//i.test(payload.url)) return toast('地址必须以 http(s):// 开头', true);
-    if (!payload.name) payload.name = payload.url.split('/').pop().split('?')[0] || '未命名电台';
+    if (!/^https?:\/\//i.test(payload.url)) return toast(t('toast.badUrl'), true);
+    if (!payload.name) payload.name = payload.url.split('/').pop().split('?')[0] || t('form.defaultStationName');
     var btn = f.querySelector('button[type="submit"]');
     if (btn) btn.disabled = true;
     post('/api/stations', payload).then(function (j) {
       state.stations = j.stations; renderAll();
-      f.reset(); toast('已添加：' + payload.name);
+      f.reset(); toast(t('toast.added', payload.name));
     }).catch(function (err) {
-      toast(String(err.message), true);
+      toast(I18N.msg(String(err.message)), true);
     }).then(function () { if (btn) btn.disabled = false; });
   }
 
@@ -1042,24 +1080,24 @@
   function submitSource(f) {
     var el = f.elements;
     var payload = { name: (el.namedItem('name').value || '').trim(), url: (el.namedItem('url').value || '').trim() };
-    if (!/^https?:\/\//i.test(payload.url)) return toast('地址必须以 http(s):// 开头', true);
+    if (!/^https?:\/\//i.test(payload.url)) return toast(t('toast.badUrl'), true);
     var btn = f.querySelector('button[type="submit"]');
     var old = btn ? btn.innerHTML : '';
-    if (btn) { btn.disabled = true; btn.textContent = '拉取中…'; }
+    if (btn) { btn.disabled = true; btn.textContent = t('toast.srcLoading'); }
     post('/api/sources', payload).then(function (j) {
       state.sources = j.sources; state.stations = j.stations;
       renderAll(); f.reset();
-      toast('已添加源');
+      toast(t('toast.sourceAdded'));
     }).catch(function (err) {
-      toast(String(err.message), true);
+      toast(I18N.msg(String(err.message)), true);
     }).then(function () { if (btn) { btn.disabled = false; btn.innerHTML = old; } });
   }
 
   /** 粘贴 M3U / 纯文本导入 */
   function importPaste(box) {
-    if (!box) return toast('找不到粘贴框', true);
+    if (!box) return toast(t('toast.noPasteBox'), true);
     var txt = box.value.trim();
-    if (!txt) return toast('先粘贴 M3U 内容', true);
+    if (!txt) return toast(t('toast.pasteFirst'), true);
     var re = /#EXTINF[^\n]*,(.*)\r?\n(https?:\/\/[^\s]+)/g;
     var items = [], m;
     while ((m = re.exec(txt)) !== null) items.push({ name: m[1].trim(), url: m[2].trim() });
@@ -1067,7 +1105,7 @@
       var re2 = /^(https?:\/\/[^\s]+)$/gm;
       while ((m = re2.exec(txt)) !== null) items.push({ name: m[1], url: m[1] });
     }
-    if (!items.length) return toast('没解析出有效地址', true);
+    if (!items.length) return toast(t('toast.noUrlParsed'), true);
     var ok = 0, fail = 0;
     var chain = Promise.resolve();
     items.forEach(function (it) {
@@ -1081,14 +1119,14 @@
     chain.then(function () {
       box.value = '';
       renderAll();
-      toast('导入完成：成功 ' + ok + ' 个' + (fail ? '，跳过 ' + fail + ' 个（重复或无效）' : ''));
+      toast(fail ? t('toast.importedSkip', ok, fail) : t('toast.imported', ok));
     });
   }
 
   /** 导出当前全部电台为 M3U 文件 */
   function exportM3U() {
     var src = state.stations;
-    if (!src.length) return toast('没有电台可导出', true);
+    if (!src.length) return toast(t('toast.exportEmpty'), true);
     var lines = ['#EXTM3U'];
     src.forEach(function (s) {
       // 站内相对路径的台标（/favicon/...）补成绝对地址，别的播放器才认得
@@ -1104,20 +1142,20 @@
     a.download = 'jiexiang-radio-' + Date.now() + '.m3u';
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
-    toast('已导出 ' + src.length + ' 个电台');
+    toast(t('toast.exported', src.length));
   }
 
   /** 清空全部电台（保留订阅源） */
   function clearAllStations() {
-    if (!state.stations.length) return toast('本来就是空的');
-    if (!confirm('确定清空全部 ' + state.stations.length + ' 个电台吗？订阅源会保留。')) return;
+    if (!state.stations.length) return toast(t('toast.alreadyEmpty'));
+    if (!confirm(t('toast.clearConfirm', state.stations.length))) return;
     var chain = Promise.resolve();
     state.stations.slice().forEach(function (s) {
       chain = chain.then(function () {
         return del('/api/stations?id=' + enc(s.id)).then(function (j) { state.stations = j.stations; });
       });
     });
-    chain.then(function () { renderAll(); toast('已清空'); });
+    chain.then(function () { renderAll(); toast(t('toast.cleared')); });
   }
 
   function doDiscover() {
@@ -1128,16 +1166,16 @@
     if (c) ps.set('country', c);
     ps.set('limit', '80');
     $('btn-disc').disabled = true;
-    $('disc-empty').textContent = '搜索中…';
+    $('disc-empty').textContent = t('disc.searching');
     $('disc-empty').hidden = false;
     api('/api/discover?' + ps.toString()).then(function (j) {
       filterText.disc = q;
       renderDisc(j.stations || []);
       discLoaded = true;
-      $('disc-empty').textContent = '没有结果，换个关键词试试。';
+      $('disc-empty').textContent = t('disc.noResult');
     }).catch(function (e) {
-      toast('搜索失败：' + e.message, true);
-      $('disc-empty').textContent = '搜索失败：' + e.message;
+      toast(t('toast.searchFail', e.message), true);
+      $('disc-empty').textContent = t('toast.searchFail', e.message);
       $('disc-empty').hidden = false;
     }).then(function () { $('btn-disc').disabled = false; });
   }
@@ -1159,19 +1197,19 @@
     ps.set('offset', String(rbOffset));
     ps.set('limit', '60');
     $('btn-rb-more').disabled = true;
-    if (rbOffset === 0) { $('rb-empty').textContent = '加载中…'; $('rb-empty').hidden = false; }
+    if (rbOffset === 0) { $('rb-empty').textContent = t('rb.loading'); $('rb-empty').hidden = false; }
     api('/api/rb?' + ps.toString()).then(function (j) {
       var list = j.stations || [];
       renderRb(list, rbOffset > 0);
       rbLoaded = true;
       rbOffset += list.length;
-      $('rb-empty').textContent = '没有结果，换个关键词试试。';
+      $('rb-empty').textContent = t('disc.noResult');
       $('rb-empty').hidden = list.length > 0 || rbOffset > 0;
       $('rb-more-wrap').hidden = !j.hasMore;
-      $('rb-count').textContent = '共 ' + (j.total || 0) + ' 个电台';
+      $('rb-count').textContent = t('count.stations', j.total || 0);
     }).catch(function (e) {
-      toast('加载失败：' + e.message, true);
-      $('rb-empty').textContent = '加载失败：' + e.message;
+      toast(t('toast.loadFail', e.message), true);
+      $('rb-empty').textContent = t('toast.loadFail', e.message);
       $('rb-empty').hidden = false;
     }).then(function () { $('btn-rb-more').disabled = false; });
   }
@@ -1189,6 +1227,7 @@
    * 启动
    * ---------------------------------------------------------------- */
   function boot() {
+    I18N.apply(document);       // 按已选语言回填静态文案（i18n.js 在 <head> 里已 init 过一次）
     loadLocal();
     applyTheme();
     applyView();
@@ -1198,7 +1237,7 @@
     bindForms();
     $('vol').value = localStorage.getItem('jxr-vol') || '80';
     setNowPlaying(null);
-    setSubStatus('选一个电台开始收听', false);
+    setSubStatus('player.hint', false);
     go('home');
 
     api('/api/sources').then(function (j) {
@@ -1206,7 +1245,7 @@
       state.stations = j.stations || [];
       renderAll();
     }).catch(function (e) {
-      $('stat').textContent = '后端连接失败：' + e.message;
+      $('stat').textContent = t('toast.backendFail', e.message);
     });
   }
 

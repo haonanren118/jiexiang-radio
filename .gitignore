@@ -24,3 +24,5 @@ _favtest/
 repro_radio5.js
 # 部署敏感信息：NAS SSH 密码通过 .env / 环境变量传入，禁止入库
 .env
+# 本地联调用的数据目录（不影响线上，禁止入库）
+_localdata/
