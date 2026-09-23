@@ -120,6 +120,53 @@
   }
 
   /* ---------------------------------------------------------------- *
+   * 电台索引 / 快照水合
+   *
+   * 收藏与足迹（localStorage）里存的是**快照**：只有 id/name/url/logo…，
+   * 没有 sources 源池，也没有 ok / noProbe 这些测速字段。
+   * 直接拿快照去播，选源菜单就只剩一条「主源 · 未测」，排序无从谈起，
+   * 主源播不通时也没有任何备用源可顺延（RadioDroid 兜底一并失效）。
+   * 所以播放 / 开菜单前，一律按 id 换成服务器最新的电台对象。
+   * ---------------------------------------------------------------- */
+  var stIndex = null;
+  var stIndexSrc = null;   // 记住索引对应的数组引用，state.stations 一换就自动失效
+  function stationIndex() {
+    if (!stIndex || stIndexSrc !== state.stations) {
+      stIndex = {};
+      stIndexSrc = state.stations;
+      state.stations.forEach(function (s) { if (s && s.id != null) stIndex[s.id] = s; });
+    }
+    return stIndex;
+  }
+  function hydrate(st) {
+    if (!st) return st;
+    var fresh = (st.id != null) ? stationIndex()[st.id] : null;
+    var use = (fresh && fresh.url) ? fresh : st;
+    // 服务器对象没有、但快照里有的本地字段（足迹分组、来源名、台标）补齐
+    if (st.group && !use.group) use.group = st.group;
+    if (st.sourceName && !use.sourceName) use.sourceName = st.sourceName;
+    if (st.logo && !use.logo) use.logo = st.logo;
+    if (st.referer && !use.referer) use.referer = st.referer;
+    if (typeof use.noProbe !== 'boolean') use.noProbe = false;
+    if (!use.sources || !use.sources.length) {
+      if (st.sources && st.sources.length) use.sources = st.sources;
+      else use.sources = [{
+        url: use.url, type: isHls(use.url) ? 'hls' : 'mp3',
+        from: use.sourceName || '主源', noProbe: false,
+        ok: null, latency: null, dead: false, checkedAt: 0
+      }];
+    }
+    use.sources.forEach(function (s) {
+      if (typeof s.noProbe !== 'boolean') s.noProbe = false;
+      if (typeof s.dead !== 'boolean') s.dead = false;
+      if (s.ok !== true && s.ok !== false) s.ok = null;
+      if (typeof s.latency !== 'number') s.latency = null;
+    });
+    use.poolCount = use.sources.length;
+    return use;
+  }
+
+  /* ---------------------------------------------------------------- *
    * 图标
    * ---------------------------------------------------------------- */
   var I = {
@@ -728,6 +775,7 @@
 
   var playToken = 0;   // 每次播放自增；作废在途的旧播放链，避免「电台A 把正在播放的电台B 顶掉」
   function play(st, chosenUrl) {
+    st = hydrate(st);                    // 足迹/收藏的快照在这里换成服务器最新对象（带源池）
     if (!st || !st.url) return;
     var myToken = ++playToken;   // 本次播放的令牌；任何更晚的 play() 都会让本令牌失效
 
@@ -751,15 +799,51 @@
     setNowPlaying(st, 'play.connecting');
     setPlaying(false);
 
+    /** 本台源池已耗尽：报「无法播放」 */
+    function giveUp() {
+      setNowPlaying(st);
+      setSubStatus('play.cantPlayShort', false);
+      toast(t('play.cantPlay', st.name), true);
+    }
+
+    /* 源池里所有源都播不通时，按台名去 RadioDroid 全量目录找备用源（服务端实测可放才返回）。
+     * 找到的流会并入 st.sources 并标 noProbe，选源菜单里就能看到蓝色备用源。 */
+    var droidAsked = false;
+    function askDroid() {
+      if (myToken !== playToken) return;
+      if (droidAsked) { giveUp(); return; }
+      droidAsked = true;
+      setSubStatus('play.tryingDroid', false, st.name);
+      api('/api/fallback?name=' + enc(st.name) + '&exclude=' + enc(urls.join(',')))
+        .then(function (j) {
+          if (myToken !== playToken) return;
+          var got = (j.streams || []).filter(function (x) { return x && x.url && !seen[x.url]; });
+          if (!got.length) { giveUp(); return; }
+          if (!st.sources) st.sources = [];
+          got.forEach(function (x) {
+            seen[x.url] = 1;
+            urls.push(x.url);
+            if (!st.sources.some(function (s) { return s.url === x.url; })) {
+              st.sources.push({
+                url: x.url, type: isHls(x.url) ? 'hls' : 'mp3',
+                from: x.from || 'RadioDroid 电台（内置）', noProbe: true,
+                ok: true, latency: x.latency == null ? null : x.latency, dead: false,
+                checkedAt: Date.now(), note: 'fallback'
+              });
+            }
+          });
+          st.poolCount = st.sources.length;
+          setNowPlaying(st);
+          toast(t('play.droidAdded', got.length));
+          tryUrl();
+        })
+        .catch(function () { if (myToken === playToken) giveUp(); });
+    }
+
     var si = 0;   // 当前尝试到第几个源
     function tryUrl() {
       if (myToken !== playToken) return;            // 已切台，放弃整条回退链
-      if (si >= urls.length) {
-        setNowPlaying(st);
-        setSubStatus('play.cantPlayShort', false);
-        toast(t('play.cantPlay', st.name), true);
-        return;
-      }
+      if (si >= urls.length) { askDroid(); return; }   // 全部源失败 → 找 RadioDroid 兜底
       var u = urls[si++];
       var label = urls.length > 1 ? t('play.srcIndex', si, urls.length) : '';
       var chain = [];
@@ -794,19 +878,33 @@
     tryUrl();
   }
 
+  /* ---------------------------------------------------------------- *
+   * 选源菜单
+   *
+   * 打开菜单时若还有「未测」的源，后台自动向 /api/probe 发起一次实测
+   * （服务端并发 4、单条 6s 超时、最多 8 条，且复用 12h 健康缓存），
+   * 结果回来后就地刷新菜单 —— 所以「未测」只是短暂过渡，不再长期挂着。
+   * RadioDroid 备用源（noProbe）按设计不主动探测，点播时按需验证。
+   * ---------------------------------------------------------------- */
+  var probeBusy = false;
+
   function renderSrcMenu(st) {
     var pop = $('src-pop'); if (!pop || !st) return;
+    st = hydrate(st);                     // 快照 → 服务器最新对象（带源池/测速结果）
+    if (!st.url) return;
     var cur = st.manualUrl || st.url;
     var list = (st.sources || []).slice();
     // 兜底：万一这台还没建源池（老数据 / 刚入库），至少给出它自己的当前源，
     // 菜单不能只剩一个标题。
     if (!list.length && st.url) {
-      list = [{ url: st.url, from: t('src.primary'), ok: null, latency: null, dead: false }];
+      list = [{ url: st.url, from: t('src.primary'), ok: null, latency: null, dead: false, noProbe: false }];
     }
-    // 排序：可用（按延迟升序）→ RadioDroid 备用源（按来源名稳定排序）→ 死链
-    // 旧版对「全部是备用源」的台返回 0（latency 都是 1e9），顺序退化为插入序，看起来像没排序。
+    // 排序分级：① 实测可放（延迟升序）② RadioDroid 备用源（按来源名稳定排序）
+    //          ③ 未测（保持原顺序，马上就会被后台测速改写成 ①/④）④ 死链
+    // 以前 ③④ 同级，排出来死链会夹在未测中间，看着就像「没排序」。
     function rankOf(x) {
-      if (x.ok && !x.dead) return [0, x.latency == null ? 1e9 : x.latency];
+      if (x.ok === false || x.dead) return [3, 0];
+      if (x.ok) return [0, x.latency == null ? 1e9 : x.latency];
       if (x.noProbe) return [1, (x.from || '')];
       return [2, 0];
     }
@@ -825,10 +923,16 @@
       return st.url;
     }
     var useUrl = willUse();
-    var html = '<div class="srcmenu-h">' + esc(t('srcmenu.title')) + '</div>';
+    var untested = srcs.filter(function (x) {
+      return !x.noProbe && x.ok == null && !x.dead && /^https?:/i.test(x.url);
+    });
+    var html = '<div class="srcmenu-h"><span>' + esc(t('srcmenu.title')) + '</span>' +
+      '<button type="button" class="srcmenu-rb" data-a="reprobe">' + esc(t('srcmenu.reprobe')) + '</button></div>';
     // 整台都只有 RadioDroid 备用源时，给一句说明，避免误以为「源没测」是 bug
     if (srcs.length && srcs.every(function (x) { return x.noProbe; })) {
       html += '<div class="srcmenu-note">' + esc(t('srcmenu.allBackup')) + '</div>';
+    } else if (untested.length) {
+      html += '<div class="srcmenu-note probing" id="srcmenu-probing">' + esc(t('srcmenu.probing', untested.length)) + '</div>';
     }
     srcs.forEach(function (x, i) {
       var isCur = (x.url === cur);
@@ -854,6 +958,46 @@
         play(st, u);
         post('/api/station/' + enc(st.id) + '/select', { url: u }).catch(function () {});
       };
+    });
+    var rb = pop.querySelector('[data-a="reprobe"]');
+    if (rb) rb.onclick = function () { scheduleProbe(st, srcs, true); };
+    // 未测的源：开菜单就顺手测掉（不阻塞渲染，结果回来再刷一次）
+    if (untested.length) scheduleProbe(st, srcs, false);
+  }
+
+  /** 后台测速：把源池里待测/需重测的地址交给服务端实测，回来后就地刷新菜单 */
+  function scheduleProbe(st, srcs, force) {
+    if (probeBusy) return;
+    var targets = srcs.filter(function (x) {
+      if (x.noProbe) return false;                  // 备用源按设计不主动探测
+      if (!/^https?:/i.test(x.url)) return false;
+      if (force) return true;                       // 手动「重新测速」：含死链一起重测
+      return x.ok == null && !x.dead;               // 自动：只测没结论的
+    }).map(function (x) { return x.url; }).slice(0, 8);
+    if (!targets.length) return;
+    probeBusy = true;
+    var pop = $('src-pop');
+    var note = pop ? pop.querySelector('.srcmenu-note.probing') : null;
+    if (note) note.textContent = t('srcmenu.probing', targets.length);
+    post('/api/probe', { urls: targets, force: !!force }).then(function (j) {
+      var by = {};
+      (j.results || []).forEach(function (r) { by[r.url] = r; });
+      (st.sources || []).forEach(function (s) {
+        var r = by[s.url];
+        if (!r) return;
+        s.ok = !!r.ok;
+        s.latency = r.latency == null ? null : r.latency;
+        s.dead = !r.ok;
+        s.checkedAt = Date.now();
+      });
+      st.poolCount = (st.sources || []).length;
+      if (current === st && pop && !pop.hidden) renderSrcMenu(st);
+    }).catch(function (e) {
+      toast(t('toast.probeFail', (e && e.message) || ''), true);
+    }).then(function () {
+      probeBusy = false;
+      var n = $('srcmenu-probing');
+      if (n && n.parentNode) n.parentNode.removeChild(n);
     });
   }
   function toggleSrcMenu() {

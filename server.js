@@ -136,9 +136,10 @@ function resolveFmUrl(name, url) {
  * 是排序「快慢」最直观的指标。
  * 只判状态码不够（喜马拉雅下架台返回 HTTP 200 + JSON 错误体），所以仍嗅探响应体。
  */
-function probeCore(url, depth, startTime) {
+function probeCore(url, depth, startTime, timeoutMs) {
   depth = depth || 0;
   startTime = startTime || Date.now();
+  const tmo = timeoutMs || PROBE_TIMEOUT;
   return new Promise((resolve) => {
     let u;
     try { u = new URL(url); } catch (e) { return resolve({ ok: false, latency: null }); }
@@ -150,13 +151,13 @@ function probeCore(url, depth, startTime) {
       method: 'GET',
       headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity', 'Range': 'bytes=0-4095' },
       rejectUnauthorized: false,
-      timeout: PROBE_TIMEOUT
+      timeout: tmo
     }, (res) => {
       const ttfb = Date.now() - startTime;
       if ([301, 302, 303, 307, 308].indexOf(res.statusCode) >= 0 && res.headers.location && depth < 3) {
         res.resume();
         let nu; try { nu = new URL(res.headers.location, u).href; } catch (e) { return finish(false, ttfb); }
-        return probeCore(nu, depth + 1, startTime).then((r) => finish(r.ok, r.latency));
+        return probeCore(nu, depth + 1, startTime, tmo).then((r) => finish(r.ok, r.latency));
       }
       if (!(res.statusCode >= 200 && res.statusCode < 400)) { res.destroy(); return finish(false, ttfb); }
       const ctype = String(res.headers['content-type'] || '').toLowerCase();
@@ -188,8 +189,151 @@ function probeCore(url, depth, startTime) {
 }
 /** 旧接口：只返回 bool（供 fallback 查找复用，保持调用方不变） */
 function probeStream(url, depth) { return probeCore(url, depth).then((r) => r.ok); }
-/** 新接口：返回 { ok, latency }（供源池测速排序） */
-function probeTimed(url, depth) { return probeCore(url, depth); }
+/** 新接口：返回 { ok, latency }（供源池测速排序）；timeoutMs 可缩短「按需测速」的等待 */
+function probeTimed(url, depth, timeoutMs) { return probeCore(url, depth, undefined, timeoutMs); }
+
+/* ------------------------------------------------------------------ *
+ * 按需测速（供前端「播放源」菜单消除「未测」）
+ *
+ * 设计：只在用户真的打开某台源池时对上位几条候选做一次实测，
+ * 并发/条数/超时都有上限，且优先复用 fmHealth 缓存（12h），
+ * 避免像全量 refreshPool 那样对上千条流地址并发探测。
+ * ------------------------------------------------------------------ */
+const UI_PROBE_CONC = Math.max(parseInt(process.env.UI_PROBE_CONC || '4', 10), 1);
+const UI_PROBE_TIMEOUT = Math.min(parseInt(process.env.UI_PROBE_TIMEOUT || '6000', 10), 20000);
+const UI_PROBE_MAX = Math.max(parseInt(process.env.UI_PROBE_MAX || '8', 10), 1);
+
+/** 把一次实测结论写回该 url 所在的所有源池条目，让后续排序/自动选源直接复用 */
+function persistProbeVerdict(url, ok, latency) {
+  let hit = 0;
+  for (const st of db.stations) {
+    const srcs = st.sources;
+    if (!srcs || !srcs.length) continue;
+    for (const s of srcs) {
+      if (s.url !== url) continue;
+      s.ok = ok; s.latency = ok ? latency : null; s.dead = !ok; s.checkedAt = Date.now();
+      hit++;
+    }
+  }
+  return hit;
+}
+
+/** 批量测速：返回 [{url, ok, latency, cached}]，并写回 fmHealth + 源池 */
+async function probeBatch(urls, force) {
+  const out = [];
+  const need = [];
+  for (const u of urls) {
+    const h = fmHealth[u];
+    if (!force && h && (Date.now() - (h.ts || 0)) < FM_HEALTH_TTL) {
+      out.push({ url: u, ok: !!h.ok, latency: h.latency == null ? null : h.latency, cached: true });
+    } else {
+      need.push(u);
+    }
+  }
+  for (let i = 0; i < need.length; i += UI_PROBE_CONC) {
+    const chunk = need.slice(i, i + UI_PROBE_CONC);
+    const rs = await Promise.all(chunk.map(async (u) => {
+      const r = await probeTimed(u, 0, UI_PROBE_TIMEOUT);
+      fmHealth[u] = { ok: r.ok, latency: r.latency == null ? null : r.latency, ts: Date.now() };
+      persistProbeVerdict(u, r.ok, r.latency);
+      return { url: u, ok: r.ok, latency: r.latency, cached: false };
+    }));
+    for (const x of rs) out.push(x);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * RadioDroid 兜底源查询（主源全部播不通时由前端调用）
+ *
+ * 两步：① 先在本机 RadioDroid 全量目录里按「归一化台名」找同名流（秒回）；
+ *       ② 本机没有再去 radio-browser 远程查（走既有 findReplacement，较慢）。
+ * 找到的候选一律实测，只把真能播的按延迟升序返回，最多 UI_FALLBACK_MAX 条。
+ * ------------------------------------------------------------------ */
+const UI_FALLBACK_MAX = Math.max(parseInt(process.env.UI_FALLBACK_MAX || '6', 10), 1);
+const UI_FALLBACK_CONC = Math.max(parseInt(process.env.UI_FALLBACK_CONC || '3', 10), 1);
+const UI_FALLBACK_REMOTE_MS = Math.max(parseInt(process.env.UI_FALLBACK_REMOTE_MS || '12000', 10), 1000);
+
+/** 给一个 promise 加超时（超时按「没找到」处理，避免兜底接口把用户吊住） */
+function withTimeout(p, ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const to = setTimeout(() => { if (!done) { done = true; resolve(null); } }, ms);
+    const settle = (v) => { if (!done) { done = true; clearTimeout(to); resolve(v); } };
+    Promise.resolve(p).then(settle, () => settle(null));
+  });
+}
+
+/* 归一化台名 -> 台站列表 的短时缓存（RadioDroid 目录上万条，逐次全量归一化太慢） */
+let normIdxAt = 0;
+let normIdxMap = null;
+const NORM_IDX_TTL = 8000;
+function normIndex() {
+  if (normIdxMap && (Date.now() - normIdxAt) < NORM_IDX_TTL) return normIdxMap;
+  const m = new Map();
+  for (const st of db.stations) {
+    if (!st || !st.name) continue;
+    const n = normStationName(st.name);
+    if (!n) continue;
+    let arr = m.get(n);
+    if (!arr) { arr = []; m.set(n, arr); }
+    arr.push(st);
+  }
+  normIdxMap = m; normIdxAt = Date.now();
+  return m;
+}
+
+function rbPoolMatches(name, exclude) {
+  const srcId = rbSrcId();
+  const want = normStationName(name);
+  const out = [];
+  if (!want) return out;
+  for (const s of (normIndex().get(want) || [])) {
+    if (s.sourceId !== srcId) continue;
+    if (!s.url || !/^https?:/i.test(s.url)) continue;
+    if (exclude.has(s.url)) continue;
+    out.push({ url: s.url, name: s.name, from: RB_SOURCE_NAME, country: rbCountryLabel(s.country) });
+  }
+  return out;
+}
+
+async function findFallbackStreams(name, excludeUrls) {
+  const exclude = new Set(excludeUrls || []);
+  let cands = rbPoolMatches(name, exclude);
+  let source = 'local';
+  if (!cands.length) {
+    // 本机目录没有同名台 → 交给既有远程查找（蜻蜓/喜马拉雅/radio-browser），限时避免吊住用户
+    try {
+      const rep = await withTimeout(findReplacement(name), UI_FALLBACK_REMOTE_MS);
+      if (rep && !exclude.has(rep)) cands = [{ url: rep, name, from: RB_SOURCE_NAME, country: '' }];
+      source = 'remote';
+    } catch (e) { log('fallback 远程查找失败：%s', e.message); }
+  }
+  cands = cands.slice(0, UI_FALLBACK_MAX * 2);
+  // 实测：能播的按延迟升序返回，全挂就返回空
+  const alive = [], dead = [];
+  for (let i = 0; i < cands.length; i += UI_FALLBACK_CONC) {
+    const chunk = cands.slice(i, i + UI_FALLBACK_CONC);
+    const rs = await Promise.all(chunk.map(async (c) => {
+      const h = fmHealth[c.url];
+      let r;
+      if (h && (Date.now() - (h.ts || 0)) < FM_HEALTH_TTL) r = { ok: !!h.ok, latency: h.latency };
+      else {
+        r = await probeTimed(c.url, 0, UI_PROBE_TIMEOUT);
+        fmHealth[c.url] = { ok: r.ok, latency: r.latency == null ? null : r.latency, ts: Date.now() };
+      }
+      return Object.assign({}, c, { ok: r.ok, latency: r.latency });
+    }));
+    for (const x of rs) (x.ok ? alive : dead).push(x);
+    if (alive.length >= UI_FALLBACK_MAX) break;
+  }
+  alive.sort((a, b) => (a.latency == null ? 1e9 : a.latency) - (b.latency == null ? 1e9 : b.latency));
+  return {
+    source,
+    found: alive.slice(0, UI_FALLBACK_MAX),
+    tried: alive.length + dead.length
+  };
+}
 
 /**
  * 按电台名去 radio-browser 找可用替代流；找到且在 NAS 实测可放才返回。
@@ -328,7 +472,18 @@ function enrichPools() {
     const existing = new Map((st.sources || []).map((s) => [s.url, s]));
     st.sources = Array.from(urls.entries()).map(([u, info]) => {
       const prev = existing.get(u);
-      if (prev) { if (info.noProbe) prev.noProbe = true; return prev; }
+      if (prev) {
+        if (info.noProbe) prev.noProbe = true;
+        // 旧数据补默认值：早期落库的源没有 noProbe 字段，前端会把 undefined 判成
+        // 「未测」，且排序时和死链同级（看起来像没排序）。这里统一归一化成布尔。
+        if (typeof prev.noProbe !== 'boolean') prev.noProbe = false;
+        if (typeof prev.dead !== 'boolean') prev.dead = false;
+        if (prev.ok !== true && prev.ok !== false) prev.ok = null;
+        if (typeof prev.latency !== 'number') prev.latency = null;
+        if (!prev.from) prev.from = info.from;
+        if (!prev.type) prev.type = isPlaylistByUrl(u) ? 'hls' : 'mp3';
+        return prev;
+      }
       return {
         url: u,
         type: isPlaylistByUrl(u) ? 'hls' : 'mp3',
@@ -3002,6 +3157,56 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, { stations: page, total, offset, limit, hasMore: offset + limit < pool.length });
     }
 
+    /* ---------- 按需测速：前端「播放源」菜单打开时批量实测，消除「未测」 ---------- */
+    if (p === '/api/probe' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const raw = Array.isArray(body.urls) ? body.urls : [];
+      const seen = new Set();
+      const urls = [];
+      for (const x of raw) {
+        if (typeof x !== 'string' || !/^https?:/i.test(x) || seen.has(x)) continue;
+        seen.add(x);
+        urls.push(x);
+        if (urls.length >= UI_PROBE_MAX) break;
+      }
+      if (!urls.length) return sendJSON(res, { results: [] });
+      const results = await probeBatch(urls, !!body.force);
+      saveDB();
+      return sendJSON(res, { results: results, probedAt: Date.now() });
+    }
+
+    /* ---------- 兜底源：本台所有源都播不通时，按台名去 RadioDroid 找备用源 ---------- */
+    if (p === '/api/fallback') {
+      const name = (u.searchParams.get('name') || '').trim();
+      if (!name) return sendError(res, 400, 'name 必填');
+      const exclude = (u.searchParams.get('exclude') || '')
+        .split(',').map((x) => x.trim()).filter((x) => /^https?:/i.test(x));
+      let r;
+      try {
+        r = await findFallbackStreams(name, exclude);
+      } catch (e) {
+        return sendError(res, 502, e.message || 'fallback 查找失败');
+      }
+      // 命中且可播的兜底源并入该台源池（标 noProbe，显示为蓝色备用源），下次点播直接可用
+      const want = normStationName(name);
+      const targets = want ? (normIndex().get(want) || []) : [];
+      for (const st of targets) {
+        for (const f of r.found) {
+          if (!st.sources) st.sources = [];
+          if (st.sources.some((x) => x.url === f.url)) continue;
+          st.sources.push({
+            url: f.url, type: isPlaylistByUrl(f.url) ? 'hls' : 'mp3',
+            from: f.from || RB_SOURCE_NAME, noProbe: true,
+            ok: true, latency: f.latency == null ? null : f.latency, dead: false,
+            checkedAt: Date.now(), note: 'fallback'
+          });
+          st.poolCount = st.sources.length;
+        }
+      }
+      if (r.found.length) saveDB();
+      return sendJSON(res, { name, source: r.source, tried: r.tried, streams: r.found });
+    }
+
     return serveStatic(req, res, p);
   } catch (e) {
     log('handler error: %s', e.stack || e.message);
@@ -3039,10 +3244,20 @@ const jxSrc = ensureJiexiangSource();
 const r5Src = ensureRadio5Source();
 const tmSrc = ensureTingfmSource();
 const rbSrc = ensureRadioBrowserSource();
+/* 开发/联调用：置 1 可跳过内置源拉取、目录刷新与全量体检，
+ * 只服务 DATA_DIR 里已有的数据（本地跑界面 / 复现渲染问题时，不会被几千个真实源干扰）。
+ * 生产环境不要设置。 */
+const SKIP_BUILTIN_LOAD = process.env.SKIP_BUILTIN_LOAD === '1';
+if (SKIP_BUILTIN_LOAD) {
+  log('SKIP_BUILTIN_LOAD=1：跳过内置源拉取 / 目录刷新 / 全量体检（仅用本地已有数据）');
+  enrichPools();
+  saveDB();
+}
 /* 多个源并行加载。
  * 注意：radio-browser 全量拉取很慢（~10-20 分钟），**不能**放进这里的 Promise.all——
  * 否则会拖住 后面 的 buildXimalayaMap / refreshPool（源池构建 + 全源体检），
  * 结果就是大量异步入库的台没有 st.sources、「播放源」菜单空白。让它单独跑。 */
+if (!SKIP_BUILTIN_LOAD) {
 Promise.all([loadFmRadio(fmSrc), loadSource(qtSrc), loadSource(jxSrc), loadRadio5(r5Src), loadTingfm(tmSrc)]).then(() => {
   seedFmOverridesFromStations();
   buildXimalayaMap(); // 喜马拉雅源已入库，建 台名->HLS 直链 索引供 fallback 使用
@@ -3056,6 +3271,7 @@ loadRadioBrowser(rbSrc).then((n) => {
 });
 scheduleFmSync();
 scheduleFavWarm(60000);   // 缺台标的台后台慢慢补齐（radio-browser 拉完会再触发一次）
+}
 
 server.listen(PORT, '0.0.0.0', () => {
   log('jiexiang-radio listening on %d, data=%s', PORT, DATA_FILE);

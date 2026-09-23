@@ -158,6 +158,8 @@
     'play.cantPlayShort': '无法播放（试试换个源）',
     'play.cantPlay': '无法播放：{0}',
     'play.blocked': '播放被浏览器拦截：{0}',
+    'play.tryingDroid': '当前源都连不上，正去 RadioDroid 找「{0}」的备用源…',
+    'play.droidAdded': '已从 RadioDroid 补充 {0} 个备用源，继续尝试',
     'chain.hlsProxy': 'HLS 代理',
     'chain.nativeHls': '原生 HLS',
     'chain.directProxy': '直连代理',
@@ -165,6 +167,8 @@
     'srcmenu.title': '播放源（绿=可放 · 红=死链 · 蓝=RadioDroid 备用源，点播时按需验证）',
     'srcmenu.allBackup': '此台全部为 RadioDroid 备用源，未提前测通断（避免上万条流地址压垮 NAS）。点播时会自动验证，连不上顺延下一个。',
     'srcmenu.willUse': '▶ 将使用',
+    'srcmenu.probing': '正在测速 {0} 个源…',
+    'srcmenu.reprobe': '重新测速',
     'stat.dead': '死链',
     'stat.playable': '可放',
     'stat.backup': '备用·点播验证',
@@ -191,7 +195,8 @@
     'toast.alreadyEmpty': '本来就是空的',
     'toast.clearConfirm': '确定清空全部 {0} 个电台吗？订阅源会保留。',
     'toast.cleared': '已清空',
-    'toast.backendFail': '后端连接失败：{0}'
+    'toast.backendFail': '后端连接失败：{0}',
+    'toast.probeFail': '测速失败：{0}'
   };
 
   /* ---------------- English ---------------- */
@@ -340,6 +345,8 @@
     'play.cantPlayShort': 'Cannot play (try another source)',
     'play.cantPlay': 'Cannot play: {0}',
     'play.blocked': 'Playback blocked by the browser: {0}',
+    'play.tryingDroid': 'No source is reachable — searching RadioDroid for a "{0}" backup…',
+    'play.droidAdded': 'Added {0} RadioDroid backup source(s), still trying',
     'chain.hlsProxy': 'HLS proxy',
     'chain.nativeHls': 'Native HLS',
     'chain.directProxy': 'Direct proxy',
@@ -347,6 +354,8 @@
     'srcmenu.title': 'Playback sources (green = OK · red = dead · blue = RadioDroid backup, verified on demand)',
     'srcmenu.allBackup': 'Every source here is a RadioDroid backup: not probed upfront, so tens of thousands of stream URLs cannot overwhelm the NAS. Playback verifies on demand and falls through to the next one.',
     'srcmenu.willUse': '▶ will use',
+    'srcmenu.probing': 'Probing {0} source(s)…',
+    'srcmenu.reprobe': 'Re-probe',
     'stat.dead': 'Dead',
     'stat.playable': 'OK',
     'stat.backup': 'Backup · on demand',
@@ -373,7 +382,8 @@
     'toast.alreadyEmpty': 'It is already empty',
     'toast.clearConfirm': 'Clear all {0} stations? Your sources will be kept.',
     'toast.cleared': 'Cleared',
-    'toast.backendFail': 'Backend unreachable: {0}'
+    'toast.backendFail': 'Backend unreachable: {0}',
+    'toast.probeFail': 'Probe failed: {0}'
   };
 
   /* ---------------- 显示层翻译：库里的中文数据 / 服务端中文提示 ---------------- */
@@ -387,6 +397,9 @@
     'RadioDroid 电台（内置）': 'RadioDroid (built-in)',
     '手动添加': 'Manual',
     '粘贴导入': 'Paste import',
+    '主源': 'Primary source',
+    '同名源': 'Same-name source',
+    'fallback': 'Fallback',
     '未命名电台': 'Unnamed station',
     '中国台湾': 'Taiwan, China',
     '中国香港': 'Hong Kong, China',
