@@ -2,7 +2,7 @@
 
 一个**能真正播放**的在线电台 Web 播放器，单个 Docker 容器搞定。
 
-内置 [radio-browser](https://www.radio-browser.info/) 全球电台库（global-radio 使用的同一个数据源），
+内置 [RadioDroid](https://github.com/segler-alex/RadioDroid)（数据源为 [radio-browser](https://www.radio-browser.info/) 全球电台库，global-radio 使用的同一个数据源），
 同时支持添加任意自定义订阅源，**多种播放列表格式全支持**，并且内置服务端代理，**不存在跨域 / 证书 / 混合内容 / IP 绑定导致的播不出声**。
 
 ---
@@ -24,6 +24,7 @@
 ## 功能
 
 - 🌍 **发现标签页**：直接搜索 radio-browser 全球电台（多个官方镜像自动容灾切换，命中哪个就用哪个）
+- 🛰️ **RadioDroid 全球电台（内置备用源）**：直接内置 [RadioDroid](https://github.com/segler-alex/RadioDroid) 的上万条全球电台目录（数据源 radio-browser.info）。这些台**不打主动测通断**（避免一次性对上万条流地址探测把 NAS 打崩），而是作为**备用源**并入其它台的源池——当你常用的源都连不上时，点播会自动顺延到 RadioDroid 备用源兜底。可在 🛰 RadioDroid 标签页按国家/搜索浏览。
 - 📺 **多种订阅源格式**：`M3U / M3U8 / PLS / ASX / XSPF / JSON / 每行一条纯文本`，拖进来自动识别
 - 🎧 **手动添加单个电台**
 - 🔗 **防盗链支持**：自动识别 `#EXTVLCOPT:http-referrer` / `#KODIPROP`，代理时带上 Referer
@@ -147,6 +148,8 @@ jiexiang-radio/
 
 本项目在内置电台数据与服务搭建过程中，复用了以下开源项目与公开数据源，特此致谢：
 
+- **🌟 RadioDroid**：[segler-alex/RadioDroid](https://github.com/segler-alex/RadioDroid) —— 本项目内置的「RadioDroid 全球电台」源即取自其背后的 [radio-browser.info](https://www.radio-browser.info/) 开放电台目录（含上万条全球电台）。为致敬与致谢，本项目以 RadioDroid 命名该内置源，并将其作为不主动测通断的**备用源**并入源池（其它源不可用时自动兜底）。**RadioDroid 是 AGPL-3.0 协议的开源 Android 电台客户端，感谢作者 segler-alex 与 radio-browser 社区的贡献。**
+- **全球电台索引 / 发现数据源**：[radio-browser](https://www.radio-browser.info/)——「发现」标签页的数据源，本项目在自动替换失效源时也会向它查询 蜻蜓FM / 企鹊台(qtfm.cn) 替代流。其数据由全球社区共同维护。
 - **FM 电台数据**：[hacks.tools / iptv.hacks.tools](https://iptv.hacks.tools) 每日更新的分类 M3U 源——本项目将其内置为「hacks.tools FM 电台（每日同步）」，并每日自动同步。
 - **电台台标（Logo）**：[fanmingming/live](https://github.com/fanmingming/live) 开源台标库——经 ghproxy 代理在 NAS 取用，修复了原 `huangsuming.codeberg.page` 整站删除导致的台标缺失。
 - **全球电台索引**：[radio-browser](https://www.radio-browser.info/)——「发现」标签页的数据源，本项目在自动替换失效源时也会向它查询 蜻蜓FM / 企鹊台(qtfm.cn) 替代流。

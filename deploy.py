@@ -1,12 +1,34 @@
 # -*- coding: utf-8 -*-
-"""把 jiexiang-radio 上传到飞牛 NAS 并构建/部署"""
+"""把 jiexiang-radio 上传到飞牛 NAS 并构建/部署
+
+安全提示：NAS 的 SSH 密码不要写死在脚本里。
+通过环境变量传入（本地部署示例）：
+    set NAS_SSH_PASSWORD=你的密码      # Windows
+    export NAS_SSH_PASSWORD=你的密码   # Linux / macOS
+    python deploy.py
+也可在 .env（本文件已被 .gitignore 忽略）里写 NAS_SSH_PASSWORD=... 自动读取。
+"""
 import os, sys, paramiko
 
-HOST = "192.168.2.14"
-USER = "admin"
-PWD = "zzh116118"
+HOST = os.environ.get("NAS_HOST", "192.168.2.14")
+USER = os.environ.get("NAS_USER", "admin")
+PWD = os.environ.get("NAS_SSH_PASSWORD", "")
 LOCAL = os.path.dirname(os.path.abspath(__file__))
-REMOTE = "/vol1/1000/docker/jiexiang-radio"
+REMOTE = os.environ.get("NAS_REMOTE", "/vol1/1000/docker/jiexiang-radio")
+
+# 兼容本地 .env（不被 git 追踪）里写 NAS_SSH_PASSWORD=...
+if not PWD:
+    try:
+        with open(os.path.join(LOCAL, ".env"), "r", encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line.startswith("NAS_SSH_PASSWORD="):
+                    PWD = _line.split("=", 1)[1].strip().strip('"').strip("'")
+    except FileNotFoundError:
+        pass
+
+if not PWD:
+    sys.exit("错误：未设置 NAS SSH 密码。请设置环境变量 NAS_SSH_PASSWORD，或在 deploy.py 同目录的 .env 里写 NAS_SSH_PASSWORD=你的密码")
 
 FILES = [
     "Dockerfile",

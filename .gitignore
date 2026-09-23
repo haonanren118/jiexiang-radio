@@ -18,3 +18,9 @@ test_add.js
 test_play.js
 __pycache__/
 _verify_sources.json
+# 调试用临时脚本（_ 前缀的 .js / 目录）
+_*.js
+_favtest/
+repro_radio5.js
+# 部署敏感信息：NAS SSH 密码通过 .env / 环境变量传入，禁止入库
+.env

@@ -217,11 +217,14 @@
    * ---------------------------------------------------------------- */
   var logoFailed = {};
 
-  /** 站内图片地址：本地烘焙台标（/logo/...）直接返回，其余走 /img 代理 */
-  function imgSrc(url) {
+  /** 站内图片地址：本地烘焙台标（/logo/...）与服务端解析的台标（/favicon/...）
+   *  直接返回，其余走 /img 代理 */
+  function imgSrc(url, sid) {
     if (!url) return '';
-    if (url.charAt(0) === '/' && url.indexOf('/logo/') === 0) return url;
-    return '/img?url=' + enc(url);
+    if (url.charAt(0) === '/') return url;
+    // 带上电台 id：万一上游台标已失效，服务端会顺手换一张真台标返回，
+    // 换不到则回 404，由 onerror 降级成首字头像（不再是千篇一律的占位图）
+    return '/img?url=' + enc(url) + (sid ? '&st=' + enc(sid) : '');
   }
 
   /** 台标兜底。
@@ -252,13 +255,23 @@
       var img = document.createElement('img');
       img.className = cls;
       // 服务端 /img 已内置占位图，正常不会触发 onerror；这里只是最后保险
-      img.src = imgSrc(raw);
+      img.src = imgSrc(raw, st && st.id);
       img.alt = '';
       img.loading = 'lazy';
       img.referrerPolicy = 'no-referrer';
+      var tries = 0;
       img.onerror = function () {
         // 图片挂了：有原生 logo 就保留占位不污染缓存，直接用本地头像顶上
         if (!(st && st.logo)) logoFailed[name] = true;
+        // 站内台标（/favicon/...）是「按需解析 + 限并发」的：第一波超出并发会被
+        // 婉拒成 404，这里等 8 秒重试一次（那时多半已解析完并进了磁盘缓存），
+        // 第二次仍失败才降级为首字头像。
+        if (String(raw).charAt(0) === '/' && tries < 1) {
+          tries++;
+          var retryUrl = raw + (raw.indexOf('?') >= 0 ? '&' : '?') + 'r=' + Date.now();
+          setTimeout(function () { if (img.parentNode) img.src = retryUrl; }, 8000);
+          return;
+        }
         img.replaceWith(avatarNode(name, cls));
       };
       return img;
@@ -685,61 +698,123 @@
     if (msg) setSub(msg);
   }
 
+  var playToken = 0;   // 每次播放自增；作废在途的旧播放链，避免「电台A 把正在播放的电台B 顶掉」
   function play(st, chosenUrl) {
     if (!st || !st.url) return;
-    var useUrl = (chosenUrl && st.sources && st.sources.some(function (x) { return x.url === chosenUrl; })) ? chosenUrl : st.url;
-    stopAll();
-    pushHistory(st);
-    setNowPlaying(st, '连接中');
-    setPlaying(false);
+    var myToken = ++playToken;   // 本次播放的令牌；任何更晚的 play() 都会让本令牌失效
 
-    var chain = [];
-    if (isHls(useUrl)) {
-      chain.push({ name: 'HLS 代理', run: function () { return playHls(hlsSrc(useUrl, st.referer)); } });
-      chain.push({ name: '原生 HLS', run: function () { return playNative(hlsSrc(useUrl, st.referer)); } });
-    }
-    chain.push({ name: '直连代理', run: function () { return playNative(proxySrc(useUrl, st.referer)); } });
-
-    var i = 0;
-    function next() {
-      if (i >= chain.length) {
-        setNowPlaying(st);
-        setSubStatus('无法播放（试试换个源）', false);
-        toast('无法播放：' + st.name, true);
-        return;
-      }
-      var step = chain[i++];
-      stopAll();
-      setSubStatus('正在连接 · ' + step.name, false);
-      step.run().then(function () {
-        setNowPlaying(st);
-        setSubStatus('正在播放 · ' + step.name, true);
-        setPlaying(true);
-        refreshCurrentViews();
-      }).catch(function (e) {
-        console.warn('[jiexiang-radio] ' + step.name + ' 失败：', e && e.message);
-        next();
-      });
-    }
-    next();
-  }
-
-  function renderSrcMenu(st) {
-    var pop = $('src-pop'); if (!pop || !st) return;
-    var cur = st.manualUrl || st.url;
-    var srcs = (st.sources || []).slice().sort(function (a, b) {
+    // 源尝试顺序：用户指定 > 已测通断且最快 > 其余 > noProbe 备用源（RadioDroid 等）。
+    // 当主源不可用，自动顺延到下一个源，直到播通或所有源耗尽（含 RadioDroid 兜底）。
+    var seen = {};
+    var urls = [];
+    function push(u) { if (u && !seen[u] && /^https?:/i.test(u)) { seen[u] = 1; urls.push(u); } }
+    var primary = (chosenUrl && st.sources && st.sources.some(function (x) { return x.url === chosenUrl; })) ? chosenUrl : st.url;
+    push(primary);
+    var ranked = (st.sources || []).slice().sort(function (a, b) {
       var oa = (a.ok && !a.dead), ob = (b.ok && !b.dead);
       if (oa !== ob) return oa ? -1 : 1;
       var la = a.latency == null ? 1e9 : a.latency, lb = b.latency == null ? 1e9 : b.latency;
       return la - lb;
     });
-    var html = '<div class="srcmenu-h">播放源（按速度排序，绿=可放）</div>';
-    srcs.forEach(function (x) {
+    ranked.forEach(function (s) { push(s.url); });
+
+    stopAll();
+    pushHistory(st);
+    setNowPlaying(st, '连接中');
+    setPlaying(false);
+
+    var si = 0;   // 当前尝试到第几个源
+    function tryUrl() {
+      if (myToken !== playToken) return;            // 已切台，放弃整条回退链
+      if (si >= urls.length) {
+        setNowPlaying(st);
+        setSubStatus('无法播放（试试换个源）', false);
+        toast('无法播放：' + st.name, true);
+        return;
+      }
+      var u = urls[si++];
+      var label = urls.length > 1 ? ('源' + si + '/' + urls.length + ' · ') : '';
+      var chain = [];
+      if (isHls(u)) {
+        chain.push({ name: 'HLS 代理', run: function () { return playHls(hlsSrc(u, st.referer)); } });
+        chain.push({ name: '原生 HLS', run: function () { return playNative(hlsSrc(u, st.referer)); } });
+      }
+      chain.push({ name: '直连代理', run: function () { return playNative(proxySrc(u, st.referer)); } });
+      var ci = 0;
+      function next() {
+        if (myToken !== playToken) return;          // 已切台，忽略
+        if (ci >= chain.length) { tryUrl(); return; }   // 当前源所有方式都失败 → 试下一个源
+        var step = chain[ci++];
+        stopAll();
+        setSubStatus('正在连接 · ' + label + step.name, false);
+        step.run().then(function () {
+          if (myToken !== playToken) return;
+          st.manualUrl = u;   // 记下实际在播的源，菜单高亮
+          setNowPlaying(st);
+          setSubStatus('正在播放 · ' + step.name, true);
+          setPlaying(true);
+          refreshCurrentViews();
+        }).catch(function (e) {
+          if (myToken !== playToken) return;
+          console.warn('[jiexiang-radio] ' + label + step.name + ' 失败：', e && e.message);
+          next();
+        });
+      }
+      next();
+    }
+    tryUrl();
+  }
+
+  function renderSrcMenu(st) {
+    var pop = $('src-pop'); if (!pop || !st) return;
+    var cur = st.manualUrl || st.url;
+    var list = (st.sources || []).slice();
+    // 兜底：万一这台还没建源池（老数据 / 刚入库），至少给出它自己的当前源，
+    // 菜单不能只剩一个标题。
+    if (!list.length && st.url) {
+      list = [{ url: st.url, from: st.sourceName || '主源', ok: null, latency: null, dead: false }];
+    }
+    // 排序：可用（按延迟升序）→ RadioDroid 备用源（按来源名稳定排序）→ 死链
+    // 旧版对「全部是备用源」的台返回 0（latency 都是 1e9），顺序退化为插入序，看起来像没排序。
+    function rankOf(x) {
+      if (x.ok && !x.dead) return [0, x.latency == null ? 1e9 : x.latency];
+      if (x.noProbe) return [1, (x.from || '')];
+      return [2, 0];
+    }
+    var srcs = list.slice().sort(function (a, b) {
+      var ra = rankOf(a), rb = rankOf(b);
+      if (ra[0] !== rb[0]) return ra[0] - rb[0];
+      if (ra[0] === 1) return ra[1] < rb[1] ? -1 : (ra[1] > rb[1] ? 1 : 0); // 备用源按来源名字典序
+      return ra[1] - rb[1];
+    });
+    // 自动会选中的源（与服务器 pickBest 同逻辑）：可用的最快源，否则第一个备用源
+    function willUse() {
+      var avail = srcs.filter(function (s) { return s.ok && !s.dead; });
+      if (avail.length) return avail[0].url;
+      var bk = srcs.filter(function (s) { return s.noProbe; });
+      if (bk.length) return bk[0].url;
+      return st.url;
+    }
+    var useUrl = willUse();
+    var html = '<div class="srcmenu-h">播放源（绿=可放 · 红=死链 · 蓝=RadioDroid 备用源，点播时按需验证）</div>';
+    // 整台都只有 RadioDroid 备用源时，给一句说明，避免误以为「源没测」是 bug
+    if (srcs.length && srcs.every(function (x) { return x.noProbe; })) {
+      html += '<div class="srcmenu-note">此台全部为 RadioDroid 备用源，未提前测通断（避免上万条流地址压垮 NAS）。点播时会自动验证，连不上顺延下一个。</div>';
+    }
+    srcs.forEach(function (x, i) {
       var isCur = (x.url === cur);
-      var stat = (x.ok === false || x.dead) ? '死链' : (x.ok ? (x.latency != null ? (x.latency + 'ms') : '可放') : '未测');
-      html += '<button class="srci' + (isCur ? ' cur' : '') + '" data-u="' + esc(x.url) + '">' +
+      var isUse = (x.url === useUrl);
+      var statCls, statTxt;
+      if (x.ok === false || x.dead) { statCls = 'dead'; statTxt = '死链'; }
+      else if (x.ok) { statCls = 'ok'; statTxt = (x.latency != null ? (x.latency + 'ms') : '可放'); }
+      else if (x.noProbe) { statCls = 'bk'; statTxt = '备用·点播验证'; }
+      else { statCls = ''; statTxt = '未测'; }
+      var tag = isUse ? '<span class="srci-use">▶ 将使用</span>' : '';
+      html += '<button class="srci' + (isCur ? ' cur' : '') + (isUse ? ' use' : '') + '" data-u="' + esc(x.url) + '">' +
+        '<span class="srci-rank">' + (i + 1) + '</span>' +
         '<span class="srci-from">' + esc(x.from || '源') + '</span>' +
-        '<span class="srci-stat ' + ((x.ok === false || x.dead) ? 'dead' : (x.ok ? 'ok' : '')) + '">' + stat + '</span></button>';
+        tag +
+        '<span class="srci-stat ' + statCls + '">' + statTxt + '</span></button>';
     });
     pop.innerHTML = html;
     Array.prototype.forEach.call(pop.querySelectorAll('.srci'), function (b) {
@@ -793,6 +868,7 @@
         if (t === 'random') { randomPlay(); return; }
         if (t === 'continue') { continueLast(); return; }
         if (t === 'discover') { go('discover'); if (!discLoaded) doDiscover(); return; }
+        if (t === 'rb') { go('rb'); if (!rbLoaded) doRbBrowse(); return; }
         go(t);
       });
     });
@@ -917,6 +993,11 @@
     $('btn-disc').addEventListener('click', doDiscover);
     $('q-disc').addEventListener('keydown', function (e) { if (e.key === 'Enter') doDiscover(); });
 
+    $('btn-rb').addEventListener('click', function () { rbOffset = 0; rbLoaded = false; doRbBrowse(); });
+    $('q-rb').addEventListener('keydown', function (e) { if (e.key === 'Enter') { rbOffset = 0; rbLoaded = false; doRbBrowse(); } });
+    $('rb-country').addEventListener('change', function () { rbOffset = 0; rbLoaded = false; doRbBrowse(); });
+    $('btn-rb-more').addEventListener('click', doRbBrowse);
+
     $('btn-play').addEventListener('click', toggle);
     $('vol').addEventListener('input', function () {
       var v = parseInt(this.value, 10) / 100;
@@ -1010,7 +1091,10 @@
     if (!src.length) return toast('没有电台可导出', true);
     var lines = ['#EXTM3U'];
     src.forEach(function (s) {
-      var attrs = ' tvg-logo="' + (s.logo || '') + '" group-title="' + (s.group || '') + '"';
+      // 站内相对路径的台标（/favicon/...）补成绝对地址，别的播放器才认得
+      var lg = s.logo || '';
+      if (lg.charAt(0) === '/') lg = location.origin + lg;
+      var attrs = ' tvg-logo="' + lg + '" group-title="' + (s.group || '') + '"';
       lines.push('#EXTINF:-1' + attrs + ',' + s.name);
       lines.push(s.url);
     });
@@ -1056,6 +1140,49 @@
       $('disc-empty').textContent = '搜索失败：' + e.message;
       $('disc-empty').hidden = false;
     }).then(function () { $('btn-disc').disabled = false; });
+  }
+
+  /* ---------------------------------------------------------------- *
+   * RadioDroid 全量目录（服务端 /api/rb 分页浏览）
+   * ---------------------------------------------------------------- */
+  var rbLoaded = false;
+  var rbOffset = 0;
+  var rbQ = '';
+  var rbCountry = '';
+  function doRbBrowse() {
+    var q = $('q-rb').value.trim();
+    var c = $('rb-country').value;
+    rbQ = q; rbCountry = c;
+    var ps = new URLSearchParams();
+    if (q) ps.set('q', q);
+    if (c) ps.set('country', c);
+    ps.set('offset', String(rbOffset));
+    ps.set('limit', '60');
+    $('btn-rb-more').disabled = true;
+    if (rbOffset === 0) { $('rb-empty').textContent = '加载中…'; $('rb-empty').hidden = false; }
+    api('/api/rb?' + ps.toString()).then(function (j) {
+      var list = j.stations || [];
+      renderRb(list, rbOffset > 0);
+      rbLoaded = true;
+      rbOffset += list.length;
+      $('rb-empty').textContent = '没有结果，换个关键词试试。';
+      $('rb-empty').hidden = list.length > 0 || rbOffset > 0;
+      $('rb-more-wrap').hidden = !j.hasMore;
+      $('rb-count').textContent = '共 ' + (j.total || 0) + ' 个电台';
+    }).catch(function (e) {
+      toast('加载失败：' + e.message, true);
+      $('rb-empty').textContent = '加载失败：' + e.message;
+      $('rb-empty').hidden = false;
+    }).then(function () { $('btn-rb-more').disabled = false; });
+  }
+
+  function renderRb(list, append) {
+    var grid = $('rb-list'), lst = $('list-rb');
+    if (!append) { grid.innerHTML = ''; if (lst) lst.innerHTML = ''; }
+    list.forEach(function (st) {
+      grid.appendChild(stationCard(st, {}));
+      if (lst) lst.appendChild(stationCard(st, {}));
+    });
   }
 
   /* ---------------------------------------------------------------- *

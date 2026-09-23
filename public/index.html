@@ -21,6 +21,7 @@
   <nav class="nav">
     <button class="nav-item active" data-tab="home"><span class="nic">🏠</span>首页</button>
     <button class="nav-item" data-tab="mine"><span class="nic">📺</span>我的电台</button>
+    <button class="nav-item" data-tab="rb"><span class="nic">🛰</span>RadioDroid</button>
     <button class="nav-item" data-tab="fav"><span class="nic">♡</span>收藏</button>
     <button class="nav-item" data-tab="history"><span class="nic">🕘</span>足迹</button>
   </nav>
@@ -201,6 +202,38 @@
     <div id="disc-list" class="grid st-grid"></div>
     <div id="list-disc" class="list st-list"></div>
     <div class="empty" id="disc-empty">输入关键词或选择国家/地区后点搜索。</div>
+  </section>
+
+  <!-- ============ RadioDroid 全球电台 ============ -->
+  <section id="pane-rb" class="pane">
+    <section class="card">
+      <div class="card-head">
+        <h3>🛰 RadioDroid 全球电台</h3>
+        <div class="head-tools"><span class="count-pill" id="rb-count"></span></div>
+      </div>
+      <p class="hint">来自 RadioDroid（radio-browser.info）全量目录，持久内置。海量台不主动测通断（避免压垮 NAS），点击时按需验证连通性。</p>
+      <div class="searchbar">
+        <input id="q-rb" type="search" placeholder="搜索全球电台名（留空按热度）" autocomplete="off" />
+        <select id="rb-country">
+          <option value="" selected>按国家/地区（全部）</option>
+          <option value="CN">中国 CN</option>
+          <option value="TW">中国台湾 TW</option>
+          <option value="HK">中国香港 HK</option>
+          <option value="JP">日本 JP</option>
+          <option value="KR">韩国 KR</option>
+          <option value="US">美国 US</option>
+          <option value="GB">英国 GB</option>
+          <option value="SG">新加坡 SG</option>
+        </select>
+        <button id="btn-rb">搜索</button>
+      </div>
+    </section>
+    <div id="rb-list" class="grid st-grid"></div>
+    <div id="list-rb" class="list st-list"></div>
+    <div class="formfoot" id="rb-more-wrap" hidden>
+      <button type="button" class="ghost" id="btn-rb-more">加载更多 ↓</button>
+    </div>
+    <div class="empty" id="rb-empty" hidden>输入关键词或选择国家/地区后点搜索。</div>
   </section>
 
   <!-- ============ 订阅源设置 ============ -->

@@ -1,7 +1,7 @@
 FROM node:18-alpine
 
 LABEL org.opencontainers.image.title="jiexiang-radio" \
-      org.opencontainers.image.description="在线电台聚合播放器：global-radio 同源 (radio-browser) + 自定义多格式订阅源 + 服务端 HLS 重写代理" \
+      org.opencontainers.image.description="在线电台聚合播放器：RadioDroid/radio-browser 全球电台 + 自定义多格式订阅源 + 服务端 HLS 重写代理" \
       org.opencontainers.image.source="https://github.com/haonanren118/jiexiang-radio"
 
 ENV PORT=8080 \

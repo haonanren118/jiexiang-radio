@@ -238,11 +238,17 @@ function normStationName(s) {
   for (const p of [/FM\s*\d+(?:\.\d+)?/i, /\d+(?:\.\d+)?\s*MHz/i, /\d+(?:\.\d+)?\s*兆赫/i, /(?<![0-9A-Za-z])\d{2,4}(?![0-9A-Za-z])/]) {
     s = s.replace(p, '');
   }
+  const SUBSTRIP = ['广播电视台', '人民广播电台', '广播电视'];
   let t = true;
   while (t) {
     t = false;
     for (const suf of ['广播电视台', '人民广播电台', '广播电视', '广播电台', '电台', '广播', '频率', '之声', '之音']) {
       if (s.length > suf.length + 1 && s.endsWith(suf)) { s = s.slice(0, -suf.length); t = true; }
+    }
+    // 长复合词也按子串剥离（如「乐山广播电视台音乐交通广播」中间的广播电视台），
+    // 以便与同名台（乐山音乐交通广播）聚合进同一源池
+    for (const sub of SUBSTRIP) {
+      if (s.includes(sub)) { s = s.split(sub).join(''); t = true; }
     }
   }
   return s;
@@ -295,32 +301,39 @@ async function findReplacement(name, sid) {
  * 这样同名台在多个订阅源里重复出现也不影响「选最快源」，且天然兼容旧数据
  * （旧 station 没有 sources 字段，这里会自动补上）。
  */
+/** 归一化台名；无名/名称为空时退化为「按 id 唯一」，保证每台都建得起源池
+ * （否则这些台 st.sources 永远是 undefined → 前端「播放源」菜单空白） */
+function poolKeyFor(st) {
+  return normStationName(st.name) || ('#' + st.id);
+}
+
 function enrichPools() {
   const byNorm = new Map();
   for (const st of db.stations) {
     if (!st || !st.url || !/^https?:/i.test(st.url)) continue;
-    const n = normStationName(st.name);
-    if (!n) continue;
+    const n = poolKeyFor(st);
     if (!byNorm.has(n)) byNorm.set(n, []);
     byNorm.get(n).push(st);
   }
   for (const st of db.stations) {
     if (!st || !st.url || !/^https?:/i.test(st.url)) continue;
-    const n = normStationName(st.name);
-    if (!n) continue;
+    const n = poolKeyFor(st);
     const peers = (byNorm.get(n) || []).filter((x) => x !== st);
-    const urls = new Map(); // url -> from（来源名）
-    const add = (u, from) => { if (u && /^https?:/i.test(u) && !urls.has(u)) urls.set(u, from); };
-    add(st.url, st.sourceName || '主源');
-    for (const p of peers) add(p.url, p.sourceName || '同名源');
+    const urls = new Map(); // url -> { from, noProbe }
+    const add = (u, from, noProbe) => {
+      if (u && /^https?:/i.test(u) && !urls.has(u)) urls.set(u, { from, noProbe: !!noProbe });
+    };
+    add(st.url, st.sourceName || '主源', st.noProbe);
+    for (const p of peers) add(p.url, p.sourceName || '同名源', p.noProbe);
     const existing = new Map((st.sources || []).map((s) => [s.url, s]));
-    st.sources = Array.from(urls.entries()).map(([u, from]) => {
+    st.sources = Array.from(urls.entries()).map(([u, info]) => {
       const prev = existing.get(u);
-      if (prev) return prev;
+      if (prev) { if (info.noProbe) prev.noProbe = true; return prev; }
       return {
         url: u,
         type: isPlaylistByUrl(u) ? 'hls' : 'mp3',
-        from,
+        from: info.from,
+        noProbe: info.noProbe,   // 标记：永不主动测通断（避免海量台压垮 NAS）
         ok: null,        // 未知（待探测）
         latency: null,   // 首字节延迟（毫秒）
         dead: false,
@@ -332,16 +345,49 @@ function enrichPools() {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 源池自愈（重要）
+ *
+ * 任何一次「入库 / 删台 / 同步」之后，新加入的台都还没有 st.sources，
+ * 必须重建一次源池，否则前端「播放源」菜单会是空白（只剩标题）。
+ * 过去只在启动 + refreshPool 里建一次，异步源加载（蜻蜓/喜马拉雅/听FM…）
+ * 以及 radio-browser 的漫长拉取会让顺序错开，导致大量台没有源池。
+ * 这里改成惰性自愈：请求台列表时若发现「本该有源池却没有」的台，就地重建一次。
+ * ------------------------------------------------------------------ */
+let poolBuiltAt = 0;             // 上次建池时间（用于节流）
+const POOL_REBUILD_MIN_MS = 2000;
+
+/** 惰性建池：有台还没建过源池就重建一次（节流，避免万级数据被反复全量重建） */
+function ensurePools() {
+  if (Date.now() - poolBuiltAt < POOL_REBUILD_MIN_MS) return;
+  for (let i = 0; i < db.stations.length; i++) {
+    const s = db.stations[i];
+    if (!s.noProbe && s.url && /^https?:/i.test(s.url) && !s.sources) {
+      enrichPools();
+      poolBuiltAt = Date.now();
+      return;
+    }
+  }
+  poolBuiltAt = Date.now();
+}
+
 /** 从某台源池里挑最快可用源；manualUrl（用户手动指定）优先 */
 function pickBest(st) {
-  const srcs = (st.sources || []).filter((s) => s.ok && !s.dead && /^https?:/i.test(s.url || ''));
-  if (!srcs.length) return null;
-  srcs.sort((a, b) => (a.latency == null ? 1e9 : a.latency) - (b.latency == null ? 1e9 : b.latency));
-  if (st.manualUrl) {
-    const m = srcs.find((s) => s.url === st.manualUrl);
-    if (m) return m.url;
+  const all = (st.sources || []).filter((s) => /^https?:/i.test(s.url || ''));
+  // 优先：已测通断且可用、按延迟升序取最快
+  const ok = all.filter((s) => s.ok && !s.dead);
+  if (ok.length) {
+    ok.sort((a, b) => (a.latency == null ? 1e9 : a.latency) - (b.latency == null ? 1e9 : b.latency));
+    if (st.manualUrl) {
+      const m = ok.find((s) => s.url === st.manualUrl);
+      if (m) return m.url;
+    }
+    return ok[0].url;
   }
-  return srcs[0].url;
+  // 没有可用源：回退到 noProbe 备用源（RadioDroid 等，不主动探测，点播时按需验证）
+  const backups = all.filter((s) => s.noProbe);
+  if (backups.length) return backups[0].url;
+  return null;
 }
 
 /**
@@ -350,9 +396,22 @@ function pickBest(st) {
  * 全部失效的电台再去 radio-browser / 喜马拉雅找替代源补进池。
  * 后台执行不阻塞；健康缓存 12h 内复用，避免每日重复探测。
  */
+let poolBusy = false;   // 全源体检进行中（台标预热等后台任务让路，别抢带宽/内存）
+
 async function refreshPool() {
+  poolBusy = true;
+  try {
+    await refreshPoolInner();
+  } finally {
+    poolBusy = false;
+  }
+}
+
+async function refreshPoolInner() {
   enrichPools();
-  const list = db.stations.filter((s) => s.url && /^https?:/i.test(s.url));
+  // 跳过「不主动测通断」的台（如 radio-browser 海量台），避免一次性对上万条流地址
+  // 并发探测把 NAS 打崩。这些台只作为播放兜底，连通性在用户点击时按需验证。
+  const list = db.stations.filter((s) => s.url && /^https?:/i.test(s.url) && !s.noProbe);
   if (!list.length) return;
   let checked = 0, alive = 0, dead = 0, switched = 0, fallback = 0;
   for (let i = 0; i < list.length; i += FM_REPAIR_CONC) {
@@ -362,6 +421,7 @@ async function refreshPool() {
       if (!srcs.length) return;
       for (const s of srcs) {
         if (!s.url) continue;
+        if (s.noProbe) { s.ok = null; s.latency = null; s.dead = false; s.checkedAt = 0; continue; }
         const h = fmHealth[s.url];
         const age = h ? (Date.now() - (h.ts || 0)) : 1e15;
         if (h && age < FM_HEALTH_TTL) {
@@ -1570,6 +1630,180 @@ async function loadRadio5(src) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * 听FM 四川电台（内置）
+ *
+ * 上游为听FM 的四川地区电台目录（region/sc），约 30 个四川/成都等地市台。
+ * 真实流地址经其 WP REST 接口 GET /wp-json/query/wndt_streams?post_id=<id>&in_web=true
+ * 返回 data.streams[]（含 mp3 直链与 m3u8），优先取 mp3 直链（lhttp.qtfm.cn）。
+ * 该接口无需登录 / nonce / token。
+ * ------------------------------------------------------------------ */
+const TINGFM_SOURCE_NAME = '听FM 四川电台（内置）';
+const TINGFM_SOURCE_URL = 'builtin://tingfm-sc';
+const TINGFM_BASE = 'https://tingfm.net';
+const TINGFM_REGION = 'sc';
+const TINGFM_STREAM_API = '/wp-json/query/wndt_streams';
+const TINGFM_CACHE_FILE = path.join(DATA_DIR, 'tingfm-sc-cache.json');
+
+function tingfmSrcId() { return idOf('src', 'tingfm-sc'); }
+
+function ensureTingfmSource() {
+  const id = tingfmSrcId();
+  let s = db.sources.find((x) => x.id === id);
+  if (!s) {
+    s = {
+      id,
+      name: TINGFM_SOURCE_NAME,
+      url: TINGFM_SOURCE_URL,
+      builtin: true,
+      remote: true,
+      fm: true,
+      enabled: true,
+      count: 0,
+      lastLoad: '',
+      error: ''
+    };
+    db.sources.push(s);
+  } else {
+    s.name = TINGFM_SOURCE_NAME;
+    s.url = TINGFM_SOURCE_URL;
+    s.builtin = true;
+    s.remote = true;
+    s.fm = true;
+  }
+  return s;
+}
+
+function loadTingfmCache() {
+  try { return JSON.parse(fs.readFileSync(TINGFM_CACHE_FILE, 'utf8')); } catch (e) { return {}; }
+}
+function saveTingfmCache(map) {
+  try { fs.writeFileSync(TINGFM_CACHE_FILE, JSON.stringify(map)); } catch (e) {}
+}
+
+/** 枚举四川地区电台目录，返回 [{id,title,logo}] */
+async function tingfmEnumerate() {
+  try {
+    const res = await requestUpstream(TINGFM_BASE + '/region/' + TINGFM_REGION, {
+      'Accept': 'text/html,*/*',
+      'Referer': TINGFM_BASE + '/'
+    }, 'tingfm');
+    if (res.statusCode !== 200) { res.resume(); return []; }
+    const buf = await readAll(res);
+    const html = buf.toString('utf-8');
+    const out = [];
+    const re = /<img class="station-logo" src="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*><a href="https:\/\/tingfm\.net\/radio\/(\d+)">([^<]+)<\/a>/g;
+    let m;
+    while ((m = re.exec(html))) {
+      out.push({ id: m[2], title: m[3].trim(), logo: m[1] });
+    }
+    return out;
+  } catch (e) {
+    log('tingfm enumerate failed: %s', e.message);
+    return [];
+  }
+}
+
+/** 取单台真实流地址列表（mp3 优先，带缓存） */
+async function tingfmStreams(id, cache) {
+  if (cache[id]) return cache[id];
+  try {
+    const res = await requestUpstream(TINGFM_BASE + TINGFM_STREAM_API + '?post_id=' + id + '&in_web=true', {
+      'Accept': 'application/json, */*',
+      'Referer': TINGFM_BASE + '/radio/' + id,
+      'X-Requested-With': 'XMLHttpRequest'
+    }, 'tingfm');
+    if (res.statusCode !== 200) { res.resume(); return []; }
+    const buf = await readAll(res);
+    const txt = decompress(buf, (res.headers['content-encoding'] || '').toLowerCase()).toString('utf8');
+    const j = JSON.parse(txt);
+    const streams = (j && j.data && j.data.streams) || [];
+    const ordered = [];
+    const seen = new Set();
+    const mp3 = streams.filter((s) => s.type === 'mp3' && /^https?:\/\//i.test(s.url || ''));
+    const rest = streams.filter((s) => /^https?:\/\//i.test(s.url || ''));
+    for (const s of mp3.concat(rest)) {
+      const u = (s.url || '').trim();
+      if (u && !seen.has(u)) { seen.add(u); ordered.push(u); }
+    }
+    if (ordered.length) { cache[id] = ordered; return ordered; }
+  } catch (e) {
+    log('tingfm stream %d failed: %s', id, e.message);
+  }
+  return [];
+}
+
+/**
+ * 加载听FM 四川源：枚举目录 -> 解析流地址（缓存）-> 按 url 去重并入 stations。
+ * 每个台取前 2 路（mp3 + 一路 m3u8）作为站内 failover。
+ */
+async function loadTingfm(src) {
+  try {
+    src.error = '';
+    const catalog = await tingfmEnumerate();
+    if (!catalog.length) { src.error = '目录枚举为 0'; return 0; }
+    const cache = loadTingfmCache();
+    let dirty = false;
+    const items = [];
+    const seen = new Set();
+    const CONC = 6;
+    for (let i = 0; i < catalog.length; i += CONC) {
+      const batch = catalog.slice(i, i + CONC);
+      const lists = await Promise.all(batch.map((c) => tingfmStreams(c.id, cache)));
+      batch.forEach((c, k) => {
+        const urls = lists[k];
+        if (!Array.isArray(urls) || !urls.length) return;
+        if (!cache[c.id]) { cache[c.id] = urls; dirty = true; }
+        for (const u of urls.slice(0, 2)) {
+          if (typeof u !== 'string' || !u) continue;
+          const key = idOf('st', u);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          items.push({ url: u, name: c.title, logo: c.logo, group: '' });
+        }
+      });
+    }
+    if (dirty) saveTingfmCache(cache);
+
+    if (items.length) {
+      db.stations = db.stations.filter((s) => s.sourceId !== src.id);
+      for (const it of items) {
+        let id = idOf('st', it.url);
+        const exist = db.stations.find((s) => s.id === id);
+        if (exist) {
+          if (!exist.sourceId) { exist.sourceId = src.id; exist.sourceName = src.name; continue; }
+          if (exist.sourceId === src.id) continue;
+          id = idOf('st', src.id + '|' + it.url);
+          if (db.stations.some((s) => s.id === id)) continue;
+        }
+        db.stations.push({
+          id,
+          name: it.name,
+          url: it.url,
+          logo: resolveLogo(it.name, it.logo),
+          group: it.group || '',
+          sourceId: src.id,
+          sourceName: src.name,
+          referer: '',
+          addedAt: new Date().toISOString()
+        });
+      }
+      src.count = items.length;
+      src.lastLoad = new Date().toISOString();
+      src.stale = false;
+      src.error = '内置 ' + catalog.length + ' 台，可用 ' + items.length + ' 路';
+      log('tingfm sc -> %d stations (catalog %d)', items.length, catalog.length);
+      return items.length;
+    }
+    src.error = '解析出 0 个可用电台';
+    return 0;
+  } catch (e) {
+    src.error = '加载失败: ' + (e.message || e);
+    log('tingfm load error: %s', (e && e.stack) ? e.stack : (e.message || e));
+    return 0;
+  }
+}
+
 function scheduleFmSync() {
   const hours = Math.max(parseInt(process.env.FM_SYNC_HOURS || '24', 10), 1);
   const intervalMs = hours * 3600 * 1000;
@@ -1589,7 +1823,7 @@ function scheduleFmSync() {
     running = true;
     if (s.stale === true) staleRetryAt = Date.now() + STALE_RETRY_GAP;
     log('fm sync due (lastLoad=%s, age=%.1fh), syncing...', s.lastLoad || 'never', ageMs / 3600000);
-    Promise.all([loadFmRadio(s), loadRadio5(ensureRadio5Source())])
+    Promise.all([loadFmRadio(s), loadRadio5(ensureRadio5Source()), loadTingfm(ensureTingfmSource()), loadRadioBrowser(ensureRadioBrowserSource())])
       .then(() => { seedFmOverridesFromStations(); saveDB(); refreshPool(); })
       .catch((e) => log('fm sync error: %s', (e && e.message) || e))
       .then(() => { running = false; });
@@ -1639,7 +1873,7 @@ async function discover(params) {
         url: s.url_resolved || s.url,
         logo: resolveLogo((s.name || '').trim(), s.favicon || ''),
         group: s.tags || '',
-        country: s.country || '',
+        country: rbCountryLabel(s.country || ''),
         codec: s.codec || '',
         bitrate: s.bitrate || 0,
         kind: 'radio-browser'
@@ -1649,6 +1883,705 @@ async function discover(params) {
     }
   }
   throw new Error('所有 radio-browser 镜像均不可用');
+}
+
+/* ------------------------------------------------------------------ *
+ * RadioDroid 源（radio-browser.info 全量目录，作为持久内置源）
+ *
+ * 设计要点（避免压垮 NAS）：
+ *   · 全量电台（上万条）入库到 db.stations，但每台打 noProbe:true；
+ *   · refreshPool 跳过 noProbe 台 / noProbe 源，绝不对这上万条流地址并发探测；
+ *   · 连通性在用户点击该台时由前端代理链按需验证（失败即「无法播放」），
+ *     或经既有 findReplacement 在其它台全死时按需查 radio-browser 兜底；
+ *   · 拉取分页 + 限制并发（RB_CONC），不一次性打爆上游/本地内存；
+ *   · 这些台不进客户端主列表（/api/sources 已过滤 noProbe），改由 /api/rb 分页浏览。
+ *   · 可用环境变量 RB_CAP 限制入库条数（0=不限制），NAS 吃紧时设个上限。
+ * ------------------------------------------------------------------ */
+const RB_SOURCE_NAME = 'RadioDroid 电台（内置）';
+const RB_SOURCE_URL = 'builtin://radio-browser';
+const RB_PAGE = 1000;          // 每页条数
+const RB_CONC = 4;             // 拉页并发，避免瞬时压垮上游/NAS
+const RB_CAP = parseInt(process.env.RB_CAP || '0', 10);     // 0=不限制
+const RB_HIDEBROKEN = true;    // 过滤已知死链，提升可用率
+const RB_RELOAD_MS = 24 * 3600 * 1000;  // 已加载且未超 24h：重启/日常同步跳过全量重拉（radio-browser 很慢，~10 分钟）
+const RB_SCHEMA = 2;           // 落库结构版本：v2 起存 homepage/logoUp（供台标自动补全），版本不符会强制重拉一次
+let rbLoading = false;         // 防并发重入（多个同步 tick 同时触发）
+
+/* 国家/地区下拉用 ISO 代码（CN/US…），radio-browser 存的是英文全称
+ * （China / The United States Of America / The United Kingdom Of Great Britain…）。
+ * 这里做代码 -> 全称关键词映射，用 includes 匹配以兼容各种写法的全称。 */
+const RB_COUNTRY_MAP = {
+  CN: ['china'],
+  TW: ['taiwan'],
+  HK: ['hong kong'],
+  MO: ['macao', 'macau'],
+  JP: ['japan'],
+  KR: ['korea'],
+  US: ['united states', 'america'],
+  GB: ['united kingdom', 'britain'],
+  SG: ['singapore'],
+  DE: ['germany'],
+  FR: ['france'],
+  RU: ['russia'],
+  CA: ['canada'],
+  AU: ['australia'],
+  IN: ['india'],
+  IT: ['italy'],
+  ES: ['spain'],
+  BR: ['brazil']
+};
+
+/* 显示用：radio-browser 的国家全称 -> 友好标签（台湾/香港/澳门 一律表述为中国的一部分） */
+function rbCountryLabel(country) {
+  const c = String(country || '');
+  const l = c.toLowerCase();
+  if (l.indexOf('taiwan') >= 0) return '中国台湾';
+  if (l.indexOf('hong kong') >= 0) return '中国香港';
+  if (l.indexOf('macao') >= 0 || l.indexOf('macau') >= 0) return '中国澳门';
+  if (l.indexOf('china') >= 0) return '中国';
+  return c;
+}
+
+function rbSrcId() { return idOf('src', 'radio-browser-global'); }
+
+function ensureRadioBrowserSource() {
+  const id = rbSrcId();
+  let s = db.sources.find((x) => x.id === id);
+  if (!s) {
+    s = {
+      id,
+      name: RB_SOURCE_NAME,
+      url: RB_SOURCE_URL,
+      builtin: true,
+      remote: true,
+      fm: true,
+      enabled: true,
+      count: 0,
+      lastLoad: '',
+      loadedOffset: 0,
+      error: ''
+    };
+    db.sources.push(s);
+  } else {
+    s.name = RB_SOURCE_NAME;
+    s.url = RB_SOURCE_URL;
+    s.builtin = true;
+    s.remote = true;
+    s.fm = true;
+  }
+  return s;
+}
+
+/**
+ * 拉取 radio-browser 全量目录并入库。
+ * 用 /json/stations（支持 limit/offset 真分页）+ hidebroken 过滤死链。
+ * 返回的 station 对象带 noProbe:true，enrichPools/refreshPool 据此跳过探测。
+ */
+async function loadRadioBrowser(src) {
+  // 已成功加载且未超 24h、且落库结构版本一致：重启 / 日常同步直接跳过全量重拉
+  if (src.count > 0 && src.lastLoad && src.schema === RB_SCHEMA) {
+    const age = Date.now() - new Date(src.lastLoad).getTime();
+    if (age < RB_RELOAD_MS) {
+      log('radio-browser 已是最新（%d 台，%d 分钟前），跳过全量重拉', src.count, Math.round(age / 60000));
+      return src.count;
+    }
+  }
+  // 防并发重入（多个同步 tick / 重启同时触发）
+  if (rbLoading) { log('radio-browser 已在加载中，跳过重复触发'); return src.count || 0; }
+  rbLoading = true;
+  try {
+    src.error = '';
+    const q = new URLSearchParams();
+    q.set('hidebroken', RB_HIDEBROKEN ? 'true' : 'false');
+    q.set('limit', String(RB_PAGE));
+    q.set('order', 'votes');
+    q.set('reverse', 'true');
+
+    // 断点续拉：整轮未完成（count>0 且无 lastLoad，可能因重启 / 重部署中断）则不清空，
+    // 从断点 offset 继续（没记录过断点就从 0 重拉，靠 URL 去重跳过已存在的台），避免清零重来。
+    let resume = false;
+    if (src.count > 0 && !src.lastLoad) {
+      resume = true;
+      if (!src.loadedOffset) src.loadedOffset = 0;
+      log('radio-browser 断点续拉：已有 %d 台，从 offset=%d 继续', src.count, src.loadedOffset);
+    } else {
+      // 全新 / 结构变更（schema 不符会强制重拉）：清掉旧的 radio-browser 台，避免重复
+      db.stations = db.stations.filter((s) => s.sourceId !== src.id);
+    }
+    // 用 Map 做 O(1) 去重，避免逐台 db.stations.find 的 O(n^2) 在万级数据上拖垮 NAS
+    const byId = new Map(db.stations.map((s) => [s.id, s]));
+    const occupied = new Set(byId.keys());
+
+    // 续拉起点：优先用记录过的断点；没记录过则用「已加载数向下取整到整页」估算，
+    // 避免从 0 把已拉到的台又抓一遍（radio-browser 限速很慢，重抓浪费数分钟）
+    let offset = resume ? Math.max(src.loadedOffset || 0, Math.floor(src.count / RB_PAGE) * RB_PAGE) : 0;
+    let loaded = resume ? src.count : 0;
+    let capped = false;
+    // 续拉时从「已加载数向上取千」开始计数，避免重复写盘
+    let nextSave = (Math.floor(loaded / 1000) + 1) * 1000;
+
+    while (true) {
+      q.set('offset', String(offset));
+      let arr = null;
+      // 逐个镜像尝试（用上次成功的 goodMirror 优先）；遇 429 退避重试，避免限流直接中断整轮
+      const order = [goodMirror].concat(RB_MIRRORS.filter((m) => m !== goodMirror));
+      for (const m of order) {
+        let ok = false;
+        for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+          try {
+            const res = await requestUpstream(m + '/json/stations?' + q.toString(), {
+              Accept: 'application/json',
+              'User-Agent': 'jiexiang-radio/1.0'
+            }, 'rb');
+            if (res.statusCode === 429) { res.resume(); await new Promise((r) => setTimeout(r, 2000 * (attempt + 1))); continue; }
+            if (res.statusCode !== 200) { res.resume(); break; }
+            const buf = await readAll(res);
+            const text = decompress(buf, (res.headers['content-encoding'] || '').toLowerCase()).toString('utf8');
+            arr = JSON.parse(text);
+            goodMirror = m;
+            ok = true;
+            break;
+          } catch (e) { /* 试下一个镜像 / 重试 */ }
+        }
+        if (ok) break;
+      }
+      if (!Array.isArray(arr)) { src.error = 'radio-browser 全量拉取失败（所有镜像不可用）'; break; }
+      if (!arr.length) break;
+
+      for (const s of arr) {
+        const u = (s.url_resolved || s.url || '').trim();
+        if (!/^https?:\/\//i.test(u)) continue;
+        const baseId = idOf('st', u);
+        let id = baseId;
+        let claimed = false;
+        if (occupied.has(baseId)) {
+          const exist = byId.get(baseId);
+          if (!exist.sourceId) {
+            // 孤儿台：认领为 radio-browser 源
+            exist.sourceId = src.id;
+            exist.sourceName = src.name;
+            claimed = true;
+            if (!exist.homepage && s.homepage) exist.homepage = String(s.homepage).trim();
+            if (!exist.logoUp && s.favicon) exist.logoUp = normalizeLogo(String(s.favicon).trim());
+            if (!exist.logo && exist.homepage) exist.logo = '/favicon/' + exist.id;
+          } else if (exist.sourceId === src.id) {
+            continue; // 本源已有，跳过
+          } else {
+            // 已被其它源占用：用变体 id 入库
+            id = idOf('st', src.id + '|' + u);
+            if (occupied.has(id)) continue;
+          }
+        }
+        if (!claimed) {
+          const tags = (s.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
+          const nm = (s.name || '').trim() || u;
+          const home = String(s.homepage || '').trim();
+          const upLogo = normalizeLogo(String(s.favicon || '').trim());
+          let lg = resolveLogo(nm, upLogo);
+          // 上游没给可用台标 → 改用本地 /favicon/<id> 端点按需解析（站点自己的 favicon
+          // + favicon.im 兜底）并落盘缓存；解析不到时前端降级成首字头像。
+          if (!lg && home) lg = '/favicon/' + id;
+          const st = {
+            id,
+            name: nm,
+            url: u,
+            logo: lg,
+            // 仅在走本地解析时留一份上游地址，作为解析链的第一优先候选
+            logoUp: lg.indexOf('/favicon/') === 0 ? upLogo : '',
+            homepage: home,
+            group: tags[0] || s.country || '',
+            country: s.country || '',
+            sourceId: src.id,
+            sourceName: src.name,
+            referer: '',
+            noProbe: true,
+            addedAt: new Date().toISOString()
+          };
+          db.stations.push(st);
+          byId.set(id, st);
+          occupied.add(id);
+        }
+        loaded++;
+        if (RB_CAP > 0 && loaded >= RB_CAP) { capped = true; break; }
+      }
+
+      // 增量落盘：边拉边写，重启 / 浏览器刷新都能看到已拉到的台
+      // 注意：lastLoad 只在整轮成功完成后才写；断点 loadedOffset 每轮都记，供重启续拉
+      if (loaded >= nextSave) {
+        src.count = loaded;
+        src.loadedOffset = offset;
+        saveDB();
+        nextSave += 1000;
+        log('radio-browser 增量落盘 -> %d stations（offset=%d）', loaded, offset);
+      }
+      if (capped || !arr.length) break;
+      offset += RB_PAGE;
+      if (offset > 300000) break; // 安全阀
+      await new Promise((r) => setTimeout(r, 120)); // 礼貌限速，避免触发 radio-browser 限流
+    }
+
+    src.count = loaded;
+    src.lastLoad = new Date().toISOString();
+    src.loadedOffset = offset;
+    src.schema = RB_SCHEMA;
+    src.stale = false;
+    src.error = '内置（不主动测通断）' + loaded + ' 个电台'
+      + (RB_CAP > 0 ? '（上限 RB_CAP=' + RB_CAP + '）' : '');
+    saveDB();
+    log('radio-browser -> %d stations（完成）', loaded);
+    enrichPools();           // 把 RadioDroid 按台名并入其它源的 sources[]（作为 noProbe 备用源）
+    saveDB();
+    scheduleFavWarm();       // 全量拉完 / 补完 homepage 后，接着预热缺台标的台
+    return loaded;
+  } catch (e) {
+    src.error = '加载失败: ' + (e.message || e);
+    log('radio-browser load error: %s', (e && e.stack) ? e.stack : (e.message || e));
+    return src.count || 0;
+  } finally {
+    rbLoading = false;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 台标自动补全（favicon 解析 + 磁盘缓存）
+ *
+ * 背景：radio-browser 上万条电台里约四成 upstream 根本没给 favicon（或给了
+ * 已经 404/超时的死链，如 google 图床、http 老站），前端只能显示首字头像，
+ * 看起来就是「很多台没有台标」。
+ *
+ * 做法（全部在服务端，浏览器依旧不直连外网）：
+ *   1. 这类台的 logo 写成 /favicon/<stationId>，由本模块按需解析；
+ *   2. 解析链：上游 favicon → 站点首页 <link rel=icon> → apple-touch-icon
+ *      → /favicon.ico → favicon.im（拒收它对不存在域名返回的默认地球图）；
+ *   3. 解析结果落盘到 DATA_DIR/favicons/ 并记索引，之后秒开、完全不打外网；
+ *   4. 用户没浏览到的部分由低频「预热」后台慢慢补齐（并发 6、每轮 120 个、轮间 1.5s，
+ *      约 1 台/秒，全量约两小时），避开 refreshPool 全源体检时段，不抢带宽、不压 NAS；
+ *   5. 解析失败记 14 天负缓存（不再重试），前端 <img> onerror 换首字头像。
+ *
+ * 这一切只对「缺台标」的台上限运行，不会同时对万条流地址发请求。
+ * ------------------------------------------------------------------ */
+const FAV_DIR = path.join(DATA_DIR, 'favicons');
+const FAV_INDEX_FILE = path.join(FAV_DIR, 'index.json');
+const FAV_MISS_TTL = 14 * 24 * 3600 * 1000;    // 失败记录保留期
+const FAV_MAX_BYTES = 80 * 1024;               // 单张台标上限，超过视为不是图标
+const FAV_CONC = parseInt(process.env.FAV_CONC || '8', 10);        // 用户浏览时的解析并发
+const FAV_WARM_CONC = parseInt(process.env.FAV_WARM_CONC || '6', 10); // 后台预热并发
+const FAV_WARM_BATCH = parseInt(process.env.FAV_WARM_BATCH || '120', 10);
+const FAV_WARM_GAP_MS = parseInt(process.env.FAV_WARM_GAP_MS || '1500', 10);
+const FAV_WARM_MAX = parseInt(process.env.FAV_WARM_MAX || '30000', 10); // 缓存条数上限（防磁盘无限涨）
+
+let favIndex = {};              // id -> { f: '文件名'|'', t: 时间戳, w/h, from, e }
+let favIndexDirty = false;
+let favRunning = 0;             // 正在解析的数量（并发闸门）
+const favInflight = new Map();  // id -> Promise（合并同一台的并发请求）
+let favWarmTimer = null;
+let favWarmStop = false;
+let favWarmIdle = false;
+let favStat = { got: 0, miss: 0, warm: 0 };
+let favById = null, favByIdLen = -1;
+
+function favEnsureDir() {
+  try { fs.mkdirSync(FAV_DIR, { recursive: true }); } catch (e) { /* 已存在 */ }
+}
+
+function favLoad() {
+  favEnsureDir();
+  try {
+    favIndex = JSON.parse(fs.readFileSync(FAV_INDEX_FILE, 'utf8')) || {};
+    if (typeof favIndex !== 'object') favIndex = {};
+  } catch (e) { favIndex = {}; }
+  const n = Object.keys(favIndex).length;
+  if (n) log('台标缓存：载入 %d 条记录（DATA_DIR/favicons）', n);
+}
+
+let favSaveTimer = null;
+function favSave() {
+  favIndexDirty = true;
+  if (favSaveTimer) return;
+  favSaveTimer = setTimeout(() => {
+    favSaveTimer = null;
+    if (!favIndexDirty) return;
+    favIndexDirty = false;
+    try {
+      fs.writeFileSync(FAV_INDEX_FILE, JSON.stringify(favIndex));
+    } catch (e) { log('台标索引写入失败: %s', e.message); }
+  }, 1000);
+}
+
+/** 按 id 取台站（惰性建索引，避免每次线性扫 2 万条） */
+function favStation(id) {
+  if (!id) return null;
+  if (favByIdLen !== db.stations.length) {
+    favById = new Map();
+    for (const s of db.stations) favById.set(s.id, s);
+    favByIdLen = db.stations.length;
+  }
+  return favById.get(id) || null;
+}
+
+/** 取 homepage 主机名（含去掉 www 的变体） */
+function favHosts(homepage) {
+  const out = [];
+  let h = '';
+  try { h = new URL(String(homepage || '')).hostname.toLowerCase(); } catch (e) { return out; }
+  if (!h || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(h)) return out;
+  out.push(h);
+  if (h.indexOf('www.') === 0) out.push(h.slice(4));
+  return out;
+}
+
+/** 嗅探图片格式与尺寸（不依赖任何三方库） */
+function sniffImage(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return { ext: 'png', mime: 'image/png', w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  }
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) { i++; continue; }
+      const mk = buf[i + 1];
+      if (mk === 0xd8 || (mk >= 0xd0 && mk <= 0xd9) || mk === 0x01) { i += 2; continue; }
+      const len = buf.readUInt16BE(i + 2);
+      if (mk >= 0xc0 && mk <= 0xcf && mk !== 0xc4 && mk !== 0xc8 && mk !== 0xcc) {
+        return { ext: 'jpg', mime: 'image/jpeg', h: buf.readUInt16BE(i + 5), w: buf.readUInt16BE(i + 7) };
+      }
+      if (len < 2) break;
+      i += 2 + len;
+    }
+    return { ext: 'jpg', mime: 'image/jpeg', w: 0, h: 0 };
+  }
+  if (buf.slice(0, 3).toString('latin1') === 'GIF') {
+    return { ext: 'gif', mime: 'image/gif', w: buf.readUInt16LE(6), h: buf.readUInt16LE(8) };
+  }
+  if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') {
+    const t = buf.slice(12, 16).toString('latin1');
+    if (t === 'VP8X' && buf.length >= 30) {
+      return { ext: 'webp', mime: 'image/webp', w: 1 + buf.readUIntLE(24, 3), h: 1 + buf.readUIntLE(27, 3) };
+    }
+    if (t === 'VP8 ' && buf.length >= 30) {
+      return { ext: 'webp', mime: 'image/webp', w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+    }
+    if (t === 'VP8L' && buf.length >= 25) {
+      const b = buf.readUInt32LE(21);
+      return { ext: 'webp', mime: 'image/webp', w: (b & 0x3fff) + 1, h: ((b >> 14) & 0x3fff) + 1 };
+    }
+    return { ext: 'webp', mime: 'image/webp', w: 0, h: 0 };
+  }
+  if (buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0 && buf.length >= 22) {
+    const n = buf.readUInt16LE(4);
+    let w = 0, h = 0, best = -1;
+    for (let k = 0; k < n && 6 + k * 16 + 16 <= buf.length; k++) {
+      const o = 6 + k * 16;
+      const cw = buf[o] || 256, ch = buf[o + 1] || 256;
+      if (cw * ch > best) { best = cw * ch; w = cw; h = ch; }
+    }
+    return { ext: 'ico', mime: 'image/x-icon', w: w, h: h };
+  }
+  if (/^\s*(?:<\?xml[\s\S]{0,200}?)?<svg/i.test(buf.slice(0, 300).toString('utf8'))) {
+    return { ext: 'svg', mime: 'image/svg+xml', w: 512, h: 512 };
+  }
+  return null;
+}
+
+/** 轻量 GET：自带超时/体积上限，跟随最多 3 次跳转，容忍自签证书 */
+function favFetch(url, timeoutMs, maxBytes, depth) {
+  depth = depth || 0;
+  return new Promise((resolve) => {
+    let u;
+    try { u = new URL(url); } catch (e) { return resolve(null); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve(null);
+    const mod = u.protocol === 'https:' ? https : http;
+    const cap = maxBytes || FAV_MAX_BYTES;
+    let settled = false;
+    const fin = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let req;
+    try {
+      req = mod.request(u, {
+        method: 'GET',
+        headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' },
+        rejectUnauthorized: false,
+        timeout: timeoutMs || 6000
+      }, (res) => {
+        const code = res.statusCode;
+        const loc = res.headers.location;
+        if ([301, 302, 303, 307, 308].indexOf(code) >= 0 && loc && depth < 3) {
+          res.resume();
+          let next;
+          try { next = new URL(loc, u).href; } catch (e) { return fin(null); }
+          return favFetch(next, timeoutMs, cap, depth + 1).then(fin);
+        }
+        if (code !== 200) { res.resume(); return fin(null); }
+        const chunks = [];
+        let n = 0;
+        res.on('data', (c) => {
+          n += c.length;
+          if (n > cap) { res.destroy(); return fin(null); }
+          chunks.push(c);
+        });
+        res.on('end', () => fin({ buf: Buffer.concat(chunks), ct: String(res.headers['content-type'] || '').toLowerCase() }));
+        res.on('error', () => fin(null));
+      });
+    } catch (e) { return fin(null); }
+    req.on('timeout', () => { req.destroy(); fin(null); });
+    req.on('error', () => fin(null));
+    req.end();
+  });
+}
+
+/** 取图并校验确实是图片（过小/非图片/三方默认图都算失败） */
+async function favTryImage(url, timeoutMs) {
+  if (!/^https?:\/\//i.test(url || '')) return null;
+  const r = await favFetch(url, timeoutMs, FAV_MAX_BYTES);
+  if (!r || !r.buf || !r.buf.length) return null;
+  const info = sniffImage(r.buf);
+  if (!info) return null;
+  // favicon.im 对「不存在的域名」会返回一张 257 字节的默认 SVG 地球 —— 不能当成台标；
+  // 但它对真实站点也可能返回真正的 SVG 台标（几千字节），那些要留。
+  if (info.ext === 'svg' && /favicon\.im/i.test(url) && r.buf.length < 800) return null;
+  if (info.w && info.w < 16) return null;
+  return { buf: r.buf, ext: info.ext, mime: info.mime, w: info.w || 0, h: info.h || 0 };
+}
+
+/** 从首页 HTML 里挑出所有 icon 声明（按 sizes / apple-touch / svg 打分排序） */
+function extractIconUrls(html, baseUrl) {
+  const found = [];
+  const re = /<link\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const tag = m[0];
+    const rel = (/\brel\s*=\s*["']?([^"'>]+)/i.exec(tag) || [])[1] || '';
+    if (!/icon/i.test(rel)) continue;
+    const href = (/\bhref\s*=\s*["']([^"']+)["']/i.exec(tag) || [])[1];
+    if (!href) continue;
+    const sizes = (/\bsizes\s*=\s*["']([^"']+)["']/i.exec(tag) || [])[1] || '';
+    let abs;
+    try { abs = new URL(href, baseUrl).href; } catch (e) { continue; }
+    if (!/^https?:/i.test(abs)) continue;
+    let score = 0;
+    if (/apple-touch-icon/i.test(rel)) score += 300;
+    const sz = /(\d+)\s*x\s*(\d+)/i.exec(sizes);
+    if (sz) score += parseInt(sz[1], 10);
+    if (/\.svgx?(\?|$)/i.test(abs) || /\.svg(\?|$)/i.test(abs)) score += 500;
+    found.push({ url: abs, score });
+  }
+  found.sort((a, b) => b.score - a.score);
+  const seen = new Set();
+  const out = [];
+  for (const f of found) {
+    if (seen.has(f.url)) continue;
+    seen.add(f.url);
+    out.push(f.url);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+/** 首页 HTML 里声明的图标（质量优先分支）：抓首页 → 取前 2 个候选 */
+async function favLinkIcon(hosts) {
+  for (const h of hosts) {
+    let page = await favFetch('https://' + h + '/', 3500, 120 * 1024);
+    if (!page) page = await favFetch('http://' + h + '/', 3000, 120 * 1024);
+    if (!page || !page.buf) break;
+    const cands = extractIconUrls(page.buf.toString('utf8'), 'https://' + h + '/').slice(0, 2);
+    for (const c of cands) {
+      const r = await favTryImage(c, 3500);
+      if (r) return r;
+    }
+    break;
+  }
+  return null;
+}
+
+/** 约定俗成路径（快速兜底分支）：apple-touch-icon 优先，再 favicon.ico */
+async function favPathIcon(hosts) {
+  for (const h of hosts) {
+    for (const p of ['/apple-touch-icon.png', '/favicon.ico']) {
+      const r = await favTryImage('https://' + h + p, 3500);
+      if (r) return Object.assign(r, { from: h + p });
+    }
+  }
+  return null;
+}
+
+/** 解析一台的台标，返回 {buf,ext,mime,w,h,from} 或 null */
+async function resolveFaviconFor(st) {
+  const hosts = favHosts(st.homepage);
+  // 0) 上游 favicon（是站点自己的图；不少「死链」其实是 http→https 301，跟随即可）
+  const up = String(st.logoUp || '').trim();
+  if (/^https?:\/\//i.test(up)) {
+    const r = await favTryImage(up, 5000);
+    if (r) return Object.assign(r, { from: 'upstream' });
+  }
+  if (!hosts.length) return null;
+  // 1) 两条分支并行跑：① 首页声明的图标（清晰） ② 约定路径（快）。
+  //    取到 ① 且尺寸够大就优先，否则谁先拿到可用的就用谁 —— 缩短平均耗时。
+  const both = await Promise.all([favLinkIcon(hosts), favPathIcon(hosts)]);
+  const link = both[0], ico = both[1];
+  if (link && (link.w >= 64 || !ico)) return Object.assign(link, { from: 'link-icon' });
+  if (ico) return ico;
+  if (link) return Object.assign(link, { from: 'link-icon' });
+  // 2) 三方兜底（对不存在的域名会回一张默认地球图，favTryImage 已剔除）
+  for (const h of hosts) {
+    const r = await favTryImage('https://favicon.im/' + h + '?larger=true', 5000);
+    if (r) return Object.assign(r, { from: 'favicon.im' });
+  }
+  // 3) 老站只有 http
+  for (const h of hosts) {
+    const r = await favTryImage('http://' + h + '/favicon.ico', 3000);
+    if (r) return Object.assign(r, { from: 'http' });
+  }
+  return null;
+}
+
+/** 解析并缓存一台；onDemand=true 表示用户正在看这张图（优先级高、并发上限更高） */
+function favResolve(id, st, onDemand) {
+  const rec = favIndex[id];
+  if (rec && rec.f) return Promise.resolve(rec);
+  if (rec && !rec.f && rec.t && (Date.now() - rec.t) < FAV_MISS_TTL) return Promise.resolve(null);
+  if (favInflight.has(id)) return favInflight.get(id);
+  const limit = onDemand ? FAV_CONC : FAV_WARM_CONC;
+  if (favRunning >= limit) return Promise.resolve(null);
+  if (!st || (!st.homepage && !st.logoUp)) return Promise.resolve(null);
+  const p = (async () => {
+    favRunning++;
+    try {
+      const r = await resolveFaviconFor(st);
+      if (r && r.buf && r.buf.length) {
+        favEnsureDir();
+        const file = id + '.' + (r.ext || 'png');
+        fs.writeFileSync(path.join(FAV_DIR, file), r.buf);
+        favIndex[id] = { f: file, t: Date.now(), w: r.w || 0, h: r.h || 0, from: r.from || '' };
+        favStat.got++;
+        favSave();
+        return favIndex[id];
+      }
+      favIndex[id] = { f: '', t: Date.now(), e: 'no-icon' };
+      favStat.miss++;
+      favSave();
+      return null;
+    } catch (e) {
+      favIndex[id] = { f: '', t: Date.now(), e: String((e && e.message) || e).slice(0, 60) };
+      favStat.miss++;
+      favSave();
+      return null;
+    } finally {
+      favRunning--;
+      favInflight.delete(id);
+    }
+  })();
+  favInflight.set(id, p);
+  return p;
+}
+
+/** 缓存命中路径（index 有记录且文件还在） */
+function favCached(id) {
+  const rec = favIndex[id];
+  if (!rec || !rec.f) return null;
+  const fp = path.join(FAV_DIR, rec.f);
+  if (!fs.existsSync(fp)) return null;
+  return { file: fp, rec: rec };
+}
+
+function favSendFile(res, fp, rec) {
+  const ext = path.extname(fp).toLowerCase();
+  const ct = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.ico': 'image/x-icon', '.svg': 'image/svg+xml' }[ext] || 'image/png';
+  const stt = fs.statSync(fp);
+  res.writeHead(200, {
+    'Content-Type': ct,
+    'Content-Length': stt.size,
+    'Cache-Control': 'public, max-age=604800, immutable',
+    'X-Logo-Source': 'cache:' + (rec && rec.from ? rec.from : '?')
+  });
+  fs.createReadStream(fp).pipe(res);
+}
+
+/** GET /favicon/<stationId>：命中缓存秒回；否则现场解析（并发受限，失败即 404 让前端用首字头像） */
+async function handleFavicon(req, res, pathname) {
+  const id = decodeURIComponent(pathname.slice('/favicon/'.length)).replace(/[^A-Za-z0-9_-]/g, '');
+  if (!id) return res.writeHead(404).end();
+  const hit = favCached(id);
+  if (hit) return favSendFile(res, hit.file, hit.rec);
+
+  const st = favStation(id);
+  const rec = favIndex[id];
+  if (rec && !rec.f && rec.t && (Date.now() - rec.t) < FAV_MISS_TTL) {
+    res.writeHead(404, { 'Cache-Control': 'public, max-age=1800' });
+    return res.end();
+  }
+  if (!st || (!st.homepage && !st.logoUp)) {
+    res.writeHead(404, { 'Cache-Control': 'public, max-age=3600' });
+    return res.end();
+  }
+  if (favRunning >= FAV_CONC || favInflight.size > 120) {
+    // 排队太深（例如用户一次刷出几十张图）：立刻放弃，前端会稍后自动重试一次，
+    // 那时多半已被缓存。这里必须 no-store，否则浏览器把 404 缓存住就不会重试了。
+    res.writeHead(404, { 'Cache-Control': 'no-store' });
+    return res.end();
+  }
+  const got = await favResolve(id, st, true);
+  if (got && got.f) return favSendFile(res, path.join(FAV_DIR, got.f), got);
+  res.writeHead(404, { 'Cache-Control': 'public, max-age=1800' });
+  return res.end();
+}
+
+/** 预热候选：logo 指向 /favicon/ 且还没缓存（或失败记录已过期）的台 */
+function favWarmCandidates() {
+  const out = [];
+  for (const s of db.stations) {
+    const lg = s.logo || '';
+    if (lg.indexOf('/favicon/') !== 0) continue;
+    const id = lg.slice('/favicon/'.length);
+    if (!id || !s.homepage) continue;
+    const rec = favIndex[id];
+    if (rec && rec.f) continue;
+    if (rec && rec.t && (Date.now() - rec.t) < FAV_MISS_TTL) continue;
+    out.push([id, s]);
+  }
+  return out;
+}
+
+/** 后台低频预热：每轮 120 个、并发 6、轮间 1.5s（≈1 台/秒），全源体检时让路 */
+async function favWarmRound() {
+  favWarmTimer = null;
+  if (favWarmStop) return;
+  if (poolBusy || rbLoading) {
+    favWarmTimer = setTimeout(favWarmRound, FAV_WARM_GAP_MS);
+    return;
+  }
+  if (Object.keys(favIndex).length >= FAV_WARM_MAX) {
+    log('台标缓存已达上限 %d 条，停止预热（可用 FAV_WARM_MAX 调整）', FAV_WARM_MAX);
+    favWarmStop = true;
+    return;
+  }
+  const list = favWarmCandidates();
+  if (!list.length) {
+    // 不永久退出：radio-browser 全量拉取/后续同步还会带进新台，转入 5 分钟低频巡检
+    if (!favWarmIdle) {
+      favWarmIdle = true;
+      log('台标预热：暂无待补的台（已补 %d 个 / 失败 %d 个），转入低频巡检', favStat.got, favStat.miss);
+    }
+    favWarmTimer = setTimeout(favWarmRound, 5 * 60 * 1000);
+    return;
+  }
+  favWarmIdle = false;
+  const batch = list.slice(0, FAV_WARM_BATCH);
+  let ok = 0;
+  for (let i = 0; i < batch.length; i += FAV_WARM_CONC) {
+    const chunk = batch.slice(i, i + FAV_WARM_CONC);
+    const rs = await Promise.all(chunk.map((c) => favResolve(c[0], c[1], false)));
+    ok += rs.filter(Boolean).length;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  favStat.warm += ok;
+  log('台标预热：本轮 %d 个（成功 %d），剩余 %d，缓存共 %d 条',
+    batch.length, ok, Math.max(0, list.length - batch.length), Object.keys(favIndex).length);
+  favWarmTimer = setTimeout(favWarmRound, FAV_WARM_GAP_MS);
+}
+
+function scheduleFavWarm(delayMs) {
+  if (favWarmTimer || favWarmStop) return;
+  favWarmTimer = setTimeout(favWarmRound, delayMs || 15000);
 }
 
 /* ------------------------------------------------------------------ *
@@ -1753,6 +2686,33 @@ const PLACEHOLDER_SVG = Buffer.from(
   '<rect width="96" height="96" rx="22" fill="#2a3140"/>' +
   '<text x="48" y="62" font-size="46" text-anchor="middle">\u{1F4FB}</text></svg>', 'utf8');
 
+/**
+ * /img 取不到图时的兜底。
+ *   · 若该台是 radio-browser 台（URL 带 st=<id>）→ 改走本地台标解析链（首页 favicon/
+ *     favicon.im），成功即返回真台标；仍失败则 404，让前端换成首字彩色头像，
+ *     而不是所有台都长一张「同一个占位图」。
+ *   · 其它源维持占位图行为（它们多数是本地烘焙台标，极少走到这里）。
+ */
+async function imgFallback(res, reason, stId) {
+  const st = stId ? favStation(stId) : null;
+  if (st && (st.homepage || st.logoUp)) {
+    const hit = favCached(stId);
+    if (hit) return favSendFile(res, hit.file, hit.rec);
+    if (favRunning < FAV_CONC && favInflight.size <= 120) {
+      const got = await favResolve(stId, st, true);
+      if (got && got.f) return favSendFile(res, path.join(FAV_DIR, got.f), got);
+    }
+    res.writeHead(404, { 'Cache-Control': 'public, max-age=600', 'X-Logo-Fallback': reason });
+    return res.end();
+  }
+  res.writeHead(200, {
+    'Content-Type': 'image/svg+xml',
+    'Cache-Control': 'public, max-age=120',
+    'X-Logo-Fallback': reason
+  });
+  return res.end(PLACEHOLDER_SVG);
+}
+
 async function handleImg(req, res, search) {
   const params = new URLSearchParams(search || '');
   let target = params.get('url');
@@ -1760,6 +2720,8 @@ async function handleImg(req, res, search) {
     return sendError(res, 400, 'missing or invalid url');
   }
   target = normalizeLogo(target);
+  // 前端带上电台 id：取图失败时可由服务端自动补一张真台标（见 imgFallback）
+  const stId = (params.get('st') || '').replace(/[^A-Za-z0-9_-]/g, '');
 
   let upstream;
   try {
@@ -1771,14 +2733,7 @@ async function handleImg(req, res, search) {
       try { upstream = await requestUpstream(alt, { Accept: 'image/*,*/*' }, 'img'); }
       catch (e2) { upstream = null; }
     }
-    if (!upstream) {
-      res.writeHead(200, {
-        'Content-Type': 'image/svg+xml',
-        'Cache-Control': 'public, max-age=120',
-        'X-Logo-Fallback': e.message || 'error'
-      });
-      return res.end(PLACEHOLDER_SVG);
-    }
+    if (!upstream) return imgFallback(res, e.message || 'error', stId);
   }
 
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1787,14 +2742,9 @@ async function handleImg(req, res, search) {
     if (upstream.headers[k]) pass[k] = upstream.headers[k];
   }
   if (!pass['content-type'] || /text\/|json/.test(pass['content-type'])) {
-    // 上游给了错误页而不是图片 → 用占位图，避免前端出现破图
+    // 上游给了错误页而不是图片 → 走兜底，避免前端出现破图
     upstream.resume();
-    res.writeHead(200, {
-      'Content-Type': 'image/svg+xml',
-      'Cache-Control': 'public, max-age=120',
-      'X-Logo-Fallback': 'not-an-image'
-    });
-    return res.end(PLACEHOLDER_SVG);
+    return imgFallback(res, 'not-an-image', stId);
   }
   res.writeHead(upstream.statusCode, pass);
   upstream.pipe(res);
@@ -1839,6 +2789,14 @@ async function handleProxy(req, res, search) {
 /* ------------------------------------------------------------------ *
  * 路由
  * ------------------------------------------------------------------ */
+
+/** 返回给客户端的电台列表：排除「不主动测通断」的海量台（radio-browser），
+ * 它们经由 /api/rb 分页浏览，避免一次性把上万条灌进浏览器前端。 */
+function clientStations() {
+  ensurePools();   // 自愈：新入库的台还没有 sources[] 就地补齐，保证「播放源」菜单不为空
+  return db.stations.filter((s) => !s.noProbe);
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const p = u.pathname;
@@ -1864,6 +2822,7 @@ const server = http.createServer(async (req, res) => {
 
     /* ---------- 代理 ---------- */
     if (p.indexOf('/hls/') === 0) return await handleHls(req, res, p, u.search);
+    if (p.indexOf('/favicon/') === 0) return await handleFavicon(req, res, p);
     if (p === '/img') return await handleImg(req, res, u.search);
     if (p === '/proxy') return await handleProxy(req, res, u.search);
 
@@ -1880,7 +2839,7 @@ const server = http.createServer(async (req, res) => {
 
     /* ---------- 订阅源 ---------- */
     if (p === '/api/sources') {
-      if (req.method === 'GET') return sendJSON(res, { sources: db.sources, stations: db.stations });
+      if (req.method === 'GET') return sendJSON(res, { sources: db.sources, stations: clientStations() });
       if (req.method === 'POST') {
         const body = JSON.parse((await readBody(req)) || '{}');
         if (!body.url || !/^https?:\/\//i.test(body.url)) return sendError(res, 400, 'url 无效');
@@ -1898,14 +2857,14 @@ const server = http.createServer(async (req, res) => {
         db.sources.push(src);
         await loadSource(src);
         saveDB();
-        return sendJSON(res, { source: src, stations: db.stations });
+        return sendJSON(res, { source: src, stations: clientStations() });
       }
       if (req.method === 'DELETE') {
         const id = u.searchParams.get('id');
         db.sources = db.sources.filter((s) => s.id !== id);
         db.stations = db.stations.filter((s) => s.sourceId !== id);
         saveDB();
-        return sendJSON(res, { ok: true, sources: db.sources, stations: db.stations });
+        return sendJSON(res, { ok: true, sources: db.sources, stations: clientStations() });
       }
     }
 
@@ -1916,7 +2875,7 @@ const server = http.createServer(async (req, res) => {
         : db.sources.slice();
       for (const s of targets) await loadSource(s);
       saveDB();
-      return sendJSON(res, { sources: db.sources, stations: db.stations });
+      return sendJSON(res, { sources: db.sources, stations: clientStations() });
     }
 
     /* ---------- 单个电台 ---------- */
@@ -1937,13 +2896,13 @@ const server = http.createServer(async (req, res) => {
           addedAt: new Date().toISOString()
         });
         saveDB();
-        return sendJSON(res, { stations: db.stations });
+        return sendJSON(res, { stations: clientStations() });
       }
       if (req.method === 'DELETE') {
         const id = u.searchParams.get('id');
         db.stations = db.stations.filter((s) => s.id !== id);
         saveDB();
-        return sendJSON(res, { stations: db.stations });
+        return sendJSON(res, { stations: clientStations() });
       }
     }
 
@@ -2002,6 +2961,39 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    /* ---------- RadioDroid 全量目录分页浏览（不进主列表，避免前端卡顿） ---------- */
+    if (p === '/api/rb') {
+      const srcId = rbSrcId();
+      const q = (u.searchParams.get('q') || '').toLowerCase();
+      const country = (u.searchParams.get('country') || '').toUpperCase();
+      let offset = parseInt(u.searchParams.get('offset') || '0', 10) || 0;
+      let limit = parseInt(u.searchParams.get('limit') || '60', 10) || 60;
+      if (!(limit >= 1 && limit <= 200)) limit = 60;
+      if (offset < 0) offset = 0;
+      let pool = db.stations.filter((s) => s.sourceId === srcId && s.url && /^https?:/i.test(s.url));
+      if (q) pool = pool.filter((s) => (s.name || '').toLowerCase().indexOf(q) >= 0);
+      if (country) {
+        // 下拉用 ISO 代码（CN/US…），radio-browser 存英文全称（China / The United States Of America…）
+        const names = RB_COUNTRY_MAP[country] || [country.toLowerCase()];
+        pool = pool.filter((s) => {
+          const c = (s.country || '').toLowerCase();
+          return names.some((n) => c === n || c.indexOf(n) >= 0);
+        });
+      }
+      const total = pool.length; // 过滤后的数量，与列表一致
+      const page = pool.slice(offset, offset + limit).map((s) => ({
+        id: s.id,
+        name: s.name,
+        url: s.url,
+        logo: s.logo,
+        group: rbCountryLabel(s.group),
+        country: rbCountryLabel(s.country),
+        sourceName: s.sourceName,
+        sources: [{ url: s.url, from: s.sourceName, ok: null, noProbe: true }]
+      }));
+      return sendJSON(res, { stations: page, total, offset, limit, hasMore: offset + limit < pool.length });
+    }
+
     return serveStatic(req, res, p);
   } catch (e) {
     log('handler error: %s', e.stack || e.message);
@@ -2032,18 +3024,30 @@ loadDB();
 /* 三个内置源并行加载，全部就绪后再做 替代源固化 + 喜马拉雅 fallback 建表 + 全量体检，
  * 避免 repair 在 喜马拉雅源 尚未入库时抢先跑、导致 fallback 无法命中 */
 loadFmAux(); // 载入按名缓存的替代源与健康状态
+favLoad();   // 载入台标磁盘缓存索引（DATA_DIR/favicons/index.json）
 const fmSrc = ensureFmSource();
 const qtSrc = ensureQingtingSource();
 const jxSrc = ensureJiexiangSource();
 const r5Src = ensureRadio5Source();
-Promise.all([loadFmRadio(fmSrc), loadSource(qtSrc), loadSource(jxSrc), loadRadio5(r5Src)]).then(() => {
+const tmSrc = ensureTingfmSource();
+const rbSrc = ensureRadioBrowserSource();
+/* 多个源并行加载。
+ * 注意：radio-browser 全量拉取很慢（~10-20 分钟），**不能**放进这里的 Promise.all——
+ * 否则会拖住 后面 的 buildXimalayaMap / refreshPool（源池构建 + 全源体检），
+ * 结果就是大量异步入库的台没有 st.sources、「播放源」菜单空白。让它单独跑。 */
+Promise.all([loadFmRadio(fmSrc), loadSource(qtSrc), loadSource(jxSrc), loadRadio5(r5Src), loadTingfm(tmSrc)]).then(() => {
   seedFmOverridesFromStations();
   buildXimalayaMap(); // 喜马拉雅源已入库，建 台名->HLS 直链 索引供 fallback 使用
+  enrichPools();      // 这些源刚入库的台还没有源池，先建一次（后面 refreshPool 还会再建）
   saveDB();
   refreshPool();
-  log('fm radio seeded (fm=%d qingting=%d jiexiang=%d)', fmSrc.count, qtSrc.count, jxSrc.count);
+  log('fm radio seeded (fm=%d qingting=%d jiexiang=%d tingfm=%d)', fmSrc.count, qtSrc.count, jxSrc.count, tmSrc.count);
+});
+loadRadioBrowser(rbSrc).then((n) => {
+  log('radio-browser ready: %d stations', n || rbSrc.count || 0);
 });
 scheduleFmSync();
+scheduleFavWarm(60000);   // 缺台标的台后台慢慢补齐（radio-browser 拉完会再触发一次）
 
 server.listen(PORT, '0.0.0.0', () => {
   log('jiexiang-radio listening on %d, data=%s', PORT, DATA_FILE);
