@@ -946,10 +946,95 @@ function cleanRadioName(n) {
   return n;
 }
 
-/** 台标图片也走服务端代理：浏览器不直连任何外部站点，302 由服务端跟随 */
+/** 台标图片也走服务端代理：浏览器不直连任何外部站点。
+ *  关键改动：外链台标统一改写成同源路径 /logo/ext_<b64url(url)>，由服务端按需抓取一次
+ *  并落盘到 DATA_DIR/logos_cache，之后走同源静态路径。
+ *  原因——飞牛 FN Connect 等远程访问中继会拦截 /img?url=https://… 这类 SSRF 特征请求，
+ *  但同源路径 /logo/（含本地烘焙台标）已验证可正常转发。全走 /logo/ 前缀即可在 FN Connect 下显示。 */
+const LOGO_CACHE_DIR = path.join(DATA_DIR, 'logos_cache');
+try { fs.mkdirSync(LOGO_CACHE_DIR, { recursive: true }); } catch (e) {}
+
+function b64urlEncode(s) {
+  return Buffer.from(String(s), 'utf8').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+  let b = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  while (b.length % 4) b += '=';
+  try { return Buffer.from(b, 'base64').toString('utf8'); } catch (e) { return ''; }
+}
+function extLogoEnc(url) { return 'ext_' + b64urlEncode(url); }
+
+/** 把上游响应收成 Buffer（用于落盘缓存）。requestUpstream 返回的是可读流。 */
+function responseToBuffer(upstream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    upstream.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    upstream.on('end', () => resolve(Buffer.concat(chunks)));
+    upstream.on('error', reject);
+  });
+}
+
+const extInflight = new Map();
+
+async function handleExtLogo(req, res, seg) {
+  const url = normalizeLogo(b64urlDecode(seg.replace(/^ext_/, '')));
+  if (!/^https?:\/\//i.test(url)) { res.writeHead(400); return res.end('bad logo url'); }
+  const cacheFile = path.join(LOGO_CACHE_DIR, seg);
+  const ctFile = cacheFile + '.ct';
+
+  // 命中磁盘缓存 → 同源静态返回（FN Connect 中继能正常转发）
+  if (fs.existsSync(cacheFile) && fs.existsSync(ctFile)) {
+    const ct = fs.readFileSync(ctFile, 'utf8').trim() || 'image/png';
+    res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' });
+    return fs.createReadStream(cacheFile).pipe(res);
+  }
+
+  // 并发去重：同一张未缓存台标只抓取一次
+  if (extInflight.has(seg)) {
+    try { await extInflight.get(seg); } catch (e) {}
+    if (fs.existsSync(cacheFile) && fs.existsSync(ctFile)) {
+      const ct = fs.readFileSync(ctFile, 'utf8').trim() || 'image/png';
+      res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' });
+      return fs.createReadStream(cacheFile).pipe(res);
+    }
+  }
+
+  const p = (async () => {
+    let upstream;
+    try { upstream = await requestUpstream(url, { Accept: 'image/*,*/*' }, 'img'); }
+    catch (e) {
+      const alt = fanmingmingAlt(url);
+      if (alt && alt !== url) {
+        try { upstream = await requestUpstream(alt, { Accept: 'image/*,*/*' }, 'img'); } catch (e2) { upstream = null; }
+      }
+    }
+    if (!upstream) return null;
+    const ct = (upstream.headers['content-type'] || '').toLowerCase();
+    if (!ct || /text\/|json|html/.test(ct)) { try { upstream.resume(); } catch (e) {} return null; }
+    const buf = await responseToBuffer(upstream);
+    try {
+      fs.mkdirSync(LOGO_CACHE_DIR, { recursive: true });
+      fs.writeFileSync(cacheFile, buf);
+      fs.writeFileSync(ctFile, ct);
+    } catch (e) {}
+    return { buf, ct };
+  })();
+  extInflight.set(seg, p);
+  try {
+    const r = await p;
+    if (!r) { res.writeHead(404, { 'Cache-Control': 'public, max-age=300' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': r.ct, 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' });
+    return res.end(r.buf);
+  } finally {
+    extInflight.delete(seg);
+  }
+}
+
 function proxyLogo(url) {
   if (!url) return '';
-  return '/img?url=' + encodeURIComponent(url);
+  if (url.charAt(0) === '/') return url;
+  return '/logo/' + extLogoEnc(url);
 }
 
 function log() {
@@ -2973,6 +3058,8 @@ const server = http.createServer(async (req, res) => {
     /* ---------- 本地烘焙台标（静态，不走外网） ---------- */
     if (p.indexOf('/logo/') === 0) {
       const f = path.basename(p.slice(6));
+      // 外链台标惰性落盘：/logo/ext_<b64url> 同源路径，规避 FN Connect 对 ?url= 的拦截
+      if (f && f.indexOf('ext_') === 0) return await handleExtLogo(req, res, f);
       const fp = path.join(FM_LOGO_DIR, f);
       if (f && fp.indexOf(FM_LOGO_DIR + path.sep) === 0 && fs.existsSync(fp)) {
         const ext = path.extname(f).toLowerCase();

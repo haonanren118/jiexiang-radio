@@ -266,21 +266,25 @@
   /* ---------------------------------------------------------------- *
    * 台标：优先用源里带的 tvg-logo；没有或加载失败才用本地生成的头像兜底
    *
-   * 重要：图片一律经 /img 让服务端去取，浏览器不直连外部图床。
+   * 重要：图片一律经服务端代理（同源 /logo/ext_… 路径）去取，浏览器不直连外部图床。
    * 原因——内置列表的 tvg-logo 原本指向 live.fanmingming.com，该域名在
    * 国内多数宽带上不可达（TCP 能连、数据不来，最后超时），浏览器直连
    * 必然全部失败，用户看到的就是「台标全没了」。
    * ---------------------------------------------------------------- */
   var logoFailed = {};
 
-  /** 站内图片地址：本地烘焙台标（/logo/...）与服务端解析的台标（/favicon/...）
-   *  直接返回，其余走 /img 代理 */
+  /** 站内图片地址：本地烘焙台标（/logo/...）、服务端解析台标（/favicon/...）直接返回；
+   *  外链台标改写成同源路径 /logo/ext_<b64url(url)>，由服务端按需抓取落盘。
+   *  这样飞牛 FN Connect 等远程中继能正常转发（不会被 ?url= 当成 SSRF 拦截）。 */
+  function extLogoEnc(s) {
+    var b = '';
+    try { b = btoa(unescape(encodeURIComponent(String(s)))); } catch (e) { b = ''; }
+    return 'ext_' + b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
   function imgSrc(url, sid) {
     if (!url) return '';
-    if (url.charAt(0) === '/') return url;
-    // 带上电台 id：万一上游台标已失效，服务端会顺手换一张真台标返回，
-    // 换不到则回 404，由 onerror 降级成首字头像（不再是千篇一律的占位图）
-    return '/img?url=' + enc(url) + (sid ? '&st=' + enc(sid) : '');
+    if (url.charAt(0) === '/') return url;   // 同源路径（/logo/、/favicon/）直接返回
+    return '/logo/' + extLogoEnc(url);        // 外链 → 同源 /logo/ext_ 路径，服务端抓取落盘
   }
 
   /** 台标兜底。
