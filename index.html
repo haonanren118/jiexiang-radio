@@ -177,7 +177,7 @@
     <div class="cta">
       <a class="btn btn-primary" href="https://github.com/haonanren118/jiexiang-radio" target="_blank" rel="noopener">⭐ <span data-i18n="cta_github">在 GitHub 查看</span></a>
       <a class="btn btn-ghost" href="#deploy" data-i18n="cta_deploy">🚀 一键部署</a>
-      <a class="btn btn-ghost" href="https://shang.qq.com/wpa/qunwpa?id=708144970" target="_blank" rel="noopener" data-i18n="cta_qq">💬 加入 QQ 群 708144970</a>
+      <a class="btn btn-ghost qq-join" href="https://shang.qq.com/wpa/qunwpa?id=708144970" target="_blank" rel="noopener" data-i18n="cta_qq">💬 加入 QQ 群 708144970</a>
     </div>
   </div>
 </header>
@@ -262,7 +262,7 @@ docker compose up -d
       <a href="https://github.com/haonanren118/jiexiang-radio" target="_blank" rel="noopener">GitHub</a>
       <a href="https://gitee.com/yygitee118/jiexiang-radio" target="_blank" rel="noopener">Gitee</a>
       <a href="https://github.com/haonanren118/jiexiang-radio#readme" target="_blank" rel="noopener" data-i18n="nav_docs2">文档</a>
-      <a href="https://shang.qq.com/wpa/qunwpa?id=708144970" target="_blank" rel="noopener">QQ 708144970</a>
+      <a class="qq-join" href="https://shang.qq.com/wpa/qunwpa?id=708144970" target="_blank" rel="noopener">QQ 708144970</a>
     </div>
   </div>
 </footer>
@@ -347,6 +347,11 @@ docker compose up -d
     var lang = (url === "en" || url === "zh-CN") ? url : (saved || (navigator.language || "zh-CN").toLowerCase().indexOf("zh") >= 0 ? "zh-CN" : "en");
     applyLang(lang);
     document.getElementById("year").textContent = new Date().getFullYear();
+  })();
+  (function(){
+    // 现代 QQ 群邀请链接（qm.qq.com，替代已停用的 shang.qq.com WPA）
+    var QQ_GROUP_LINK = "https://qm.qq.com/cgi-bin/qm/qr?k=dEBGYbmu1lIRp7bAgHFim0W1uDsYl9v5&jump_from=webapi&authKey=fmTG96MhfqDQ5KARA/OvnuWAigCAloClvYhtSiEQd0jQneXmGons54BwlAh1+bUi";
+    document.querySelectorAll("a.qq-join").forEach(function(a){ a.setAttribute("href", QQ_GROUP_LINK); });
   })();
 </script>
 </body>
