@@ -1,0 +1,8 @@
+# runtime data (DB, logs, caches)
+data/
+*.log
+dc-build.log
+node_modules/
+.DS_Store
+.idea/
+.vscode/

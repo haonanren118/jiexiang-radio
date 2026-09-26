@@ -1,0 +1,40 @@
+#EXTM3U
+# 蜻蜓FM / 企鹊台(qtfm.cn) 内置电台源
+# 全部为 NAS 实际播放网络实测 HTTP 200 audio/mpeg 的直链：
+#   https://lhttp.qtfm.cn/live/<id>/64k.mp3
+# 由 server.js 在启动时作为内置订阅源加载（presets/qingting-radio.m3u）。
+# 台标优先按电台名取 fanmingming（ghproxy 代理），缺失时前端回退占位图。
+#EXTINF:-1 tvg-logo="https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/radio/%E4%B8%AD%E5%9B%BD%E4%B9%8B%E5%A3%B0.png" group-title="蜻蜓FM",中国之声
+https://lhttp.qtfm.cn/live/15318317/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",国际新闻
+https://lhttp.qtfm.cn/live/20500172/64k.mp3
+#EXTINF:-1 tvg-logo="https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/radio/%E7%BE%8A%E5%9F%8E%E4%BA%A4%E9%80%9A%E7%94%B5%E5%8F%B0.png" group-title="蜻蜓FM",羊城交通电台
+https://lhttp.qtfm.cn/live/1262/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",江苏经典流行音乐广播
+https://lhttp.qtfm.cn/live/4938/64k.mp3
+#EXTINF:-1 tvg-logo="https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/radio/%E5%B9%BF%E4%B8%9C%E9%9F%B3%E4%B9%90%E4%B9%8B%E5%A3%B0.png" group-title="蜻蜓FM",广东音乐之声
+https://lhttp.qtfm.cn/live/1260/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",Fm891线上音乐台
+https://lhttp.qtfm.cn/live/20500215/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",两广之声音乐台
+https://lhttp.qtfm.cn/live/20500149/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",AsiaFM亚洲粤语台
+https://lhttp.qtfm.cn/live/15318569/64k.mp3
+#EXTINF:-1 tvg-logo="https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/radio/%E5%9B%9B%E5%B7%9D%E5%9F%8E%E5%B8%82%E4%B9%8B%E9%9F%B3.png" group-title="蜻蜓FM",四川城市之音
+https://lhttp.qtfm.cn/live/1111/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",四川经济广播
+https://lhttp.qtfm.cn/live/4927/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",四川新闻广播
+https://lhttp.qtfm.cn/live/4906/64k.mp3
+#EXTINF:-1 tvg-logo="https://ghproxy.net/https://raw.githubusercontent.com/fanmingming/live/main/radio/%E5%9B%9B%E5%B7%9D%E9%9F%B3%E4%B9%90%E5%B9%BF%E6%92%AD.png" group-title="蜻蜓FM",四川音乐广播
+https://lhttp.qtfm.cn/live/1110/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",北京音乐广播
+https://lhttp.qtfm.cn/live/332/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",环球资讯广播
+https://lhttp.qtfm.cn/live/20500222/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",500首华语经典
+https://lhttp.qtfm.cn/live/5022308/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",FM102.4靖江广播电台
+https://lhttp.qtfm.cn/live/15318120/64k.mp3
+#EXTINF:-1 tvg-logo="" group-title="蜻蜓FM",徐州农村广播
+https://lhttp.qtfm.cn/live/20211623/64k.mp3

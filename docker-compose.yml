@@ -1,0 +1,16 @@
+services:
+  jiexiang-radio:
+    build: .
+    image: jiexiang-radio:latest
+    container_name: jiexiang-radio
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - PORT=8080
+      - DATA_DIR=/data
+      - TZ=Asia/Shanghai
+      # 上游（电台 CDN）单次请求超时，毫秒
+      - UPSTREAM_TIMEOUT=15000
