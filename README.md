@@ -1,6 +1,8 @@
 # 📻 jiexiang-radio 杰翔电台
 
-一个**能真正播放**的在线电台 Web 播放器，单个 Docker 容器搞定。
+> **网络电台 · 在线电台 · 网络收音机 · Internet Radio · Online Radio · Web Radio**
+
+一个**能真正播放**的在线电台 Web 播放器（Docker 一键部署），单个容器搞定。
 
 内置 [RadioDroid](https://github.com/segler-alex/RadioDroid)（数据源为 [radio-browser](https://www.radio-browser.info/) 全球电台库，global-radio 使用的同一个数据源），
 同时支持添加任意自定义订阅源，**多种播放列表格式全支持**，并且内置服务端代理，**不存在跨域 / 证书 / 混合内容 / IP 绑定导致的播不出声**。
