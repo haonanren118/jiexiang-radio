@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>杰翔电台 jiexiang-radio · 能真正播放的网络电台 Web 播放器</title>
+<meta name="description" content="一个能真正播放的网络电台 Web 播放器，Docker 一键部署。支持 HLS、跨域服务端代理、全球电台搜索、多种订阅源格式、简体中文 / English 双语界面。网络电台 · 在线电台 · 网络收音机 · Internet Radio · Online Radio · Web Radio" />
+<meta name="keywords" content="网络电台,在线电台,网络收音机,网络广播,在线收听电台,Internet Radio,Online Radio,Web Radio,Radio Browser,RadioDroid,Docker 电台" />
+<meta name="author" content="haonanren118" />
+<meta name="robots" content="index,follow" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="杰翔电台 jiexiang-radio · 能真正播放的网络电台" />
+<meta property="og:description" content="Docker 一键部署的网络电台 Web 播放器，真正能播：HLS + 跨域代理 + 全球电台 + 双语界面。" />
+<meta property="og:url" content="https://haonanren118.github.io/jiexiang-radio/" />
+<meta property="og:site_name" content="jiexiang-radio" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="杰翔电台 jiexiang-radio · 能真正播放的网络电台" />
+<meta name="twitter:description" content="Docker 一键部署的网络电台 Web 播放器，真正能播：HLS + 跨域代理 + 全球电台 + 双语界面。" />
+
+<link rel="canonical" href="https://haonanren118.github.io/jiexiang-radio/" />
+<style>
+  :root {
+    --bg: #0b1020;
+    --bg2: #0e1530;
+    --fg: #e8ecf6;
+    --muted: #9aa6c4;
+    --brand: #6ea8fe;
+    --brand2: #b388ff;
+    --accent: #2dd4bf;
+    --card: rgba(255, 255, 255, 0.05);
+    --card-border: rgba(255, 255, 255, 0.12);
+    --glow: 0 8px 40px rgba(110, 168, 254, 0.25);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background:
+      radial-gradient(1000px 600px at 12% -10%, rgba(110,168,254,0.18), transparent 60%),
+      radial-gradient(900px 500px at 95% 0%, rgba(179,136,255,0.16), transparent 55%),
+      linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
+    background-attachment: fixed;
+    min-height: 100vh;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  /* Nav */
+  nav {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(14px);
+    background: rgba(11, 16, 32, 0.6);
+    border-bottom: 1px solid var(--card-border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .3px; }
+  .brand .logo {
+    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--brand), var(--brand2));
+    box-shadow: var(--glow); font-size: 18px;
+  }
+  .nav-links { display: flex; align-items: center; gap: 18px; }
+  .nav-links a { color: var(--muted); font-size: 14px; }
+  .nav-links a:hover { color: var(--fg); text-decoration: none; }
+  .lang-btn {
+    cursor: pointer; border: 1px solid var(--card-border); background: var(--card);
+    color: var(--fg); border-radius: 999px; padding: 5px 12px; font-size: 13px;
+  }
+  .lang-btn:hover { border-color: var(--brand); }
+
+  /* Hero */
+  .hero { padding: 72px 0 40px; text-align: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted);
+    border: 1px solid var(--card-border); background: var(--card); padding: 6px 14px; border-radius: 999px;
+    margin-bottom: 22px;
+  }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  h1 {
+    font-size: clamp(34px, 6vw, 60px); line-height: 1.1; margin: 0 0 18px; font-weight: 800;
+    background: linear-gradient(135deg, #fff 0%, var(--brand) 55%, var(--brand2) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { font-size: clamp(16px, 2.4vw, 20px); color: var(--muted); max-width: 720px; margin: 0 auto 30px; }
+  .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 12px;
+    font-weight: 600; font-size: 15px; border: 1px solid transparent; transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-2px); }
+  .btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #06122e; box-shadow: var(--glow); }
+  .btn-ghost { background: var(--card); color: var(--fg); border-color: var(--card-border); }
+
+  /* Glass card */
+  .glass {
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 18px; backdrop-filter: blur(10px);
+  }
+
+  /* Sections */
+  section { padding: 40px 0; }
+  .sec-title { text-align: center; font-size: clamp(24px, 4vw, 34px); font-weight: 800; margin: 0 0 8px; }
+  .sec-sub { text-align: center; color: var(--muted); margin: 0 0 32px; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  .feature { padding: 22px; }
+  .feature .ic {
+    width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-size: 22px;
+    background: linear-gradient(135deg, rgba(110,168,254,.2), rgba(179,136,255,.2)); border: 1px solid var(--card-border);
+    margin-bottom: 14px;
+  }
+  .feature h3 { margin: 0 0 8px; font-size: 17px; }
+  .feature p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  /* Why table */
+  .why { padding: 26px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--card-border); }
+  th { color: var(--muted); font-weight: 600; }
+  td.problem { color: #ff9a9a; }
+  td.fix { color: var(--accent); }
+
+  /* Code */
+  .code {
+    margin: 0 auto; max-width: 760px; padding: 20px 22px; overflow-x: auto;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13.5px; color: #cfe0ff;
+  }
+  .code pre { margin: 0; }
+  .code .c { color: #6f7d9c; }
+
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; }
+  .step { padding: 22px; }
+  .step .n {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 700;
+    background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #06122e; margin-bottom: 12px;
+  }
+  .step h3 { margin: 0 0 6px; font-size: 16px; }
+  .step p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  footer { border-top: 1px solid var(--card-border); padding: 30px 0 50px; color: var(--muted); font-size: 13px; }
+  .foot-inner { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
+  .foot-links { display: flex; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 560px) {
+    .nav-links { gap: 10px; }
+    .nav-links a.hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <div class="brand"><span class="logo">📻</span><span data-i18n="brand">杰翔电台</span></div>
+    <div class="nav-links">
+      <a class="hide-sm" href="https://github.com/haonanren118/jiexiang-radio" target="_blank" rel="noopener">GitHub</a>
+      <a class="hide-sm" href="https://gitee.com/yygitee118/jiexiang-radio" target="_blank" rel="noopener">Gitee</a>
+      <a class="hide-sm" href="https://github.com/haonanren118/jiexiang-radio#readme" target="_blank" rel="noopener" data-i18n="nav_docs">文档</a>
+      <button class="lang-btn" id="langBtn">🌐 EN</button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="badge"><span class="dot"></span><span data-i18n="badge">Docker 一键部署 · 真正能播的网络电台</span></div>
+    <h1 data-i18n="title">能真正播放的网络电台</h1>
+    <p class="sub" data-i18n="sub">单个容器搞定。内置 HLS 播放、跨域服务端代理、全球电台搜索与多种订阅源格式，简体中文 / English 双语界面。把「浏览器播不出声」这件事彻底解决。</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/haonanren118/jiexiang-radio" target="_blank" rel="noopener">⭐ <span data-i18n="cta_github">在 GitHub 查看</span></a>
+      <a class="btn btn-ghost" href="#deploy" data-i18n="cta_deploy">🚀 一键部署</a>
+      <a class="btn btn-ghost" href="https://shang.qq.com/wpa/qunwpa?id=708144970" target="_blank" rel="noopener" data-i18n="cta_qq">💬 加入 QQ 群 708144970</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2 class="sec-title" data-i18n="feat_title">核心特性</h2>
+    <p class="sec-sub" data-i18n="feat_sub">不只是个播放器，是把「能播」做到极致的一整套方案</p>
+    <div class="features">
+      <div class="glass feature"><div class="ic">🎵</div><h3 data-i18n="f1_t">真的能播</h3><p data-i18n="f1_d">内置 hls.js，自动识别 HLS；服务端代理重写 m3u8，解决 CDN 跳转 + token 播到一半断的问题。</p></div>
+      <div class="glass feature"><div class="ic">🌍</div><h3 data-i18n="f2_t">全球电台搜索</h3><p data-i18n="f2_d">基于 radio-browser 的全球电台库，多镜像自动容灾切换，搜到即用。</p></div>
+      <div class="glass feature"><div class="ic">🛰️</div><h3 data-i18n="f3_t">RadioDroid 备用源</h3><p data-i18n="f3_d">内置上万条全球电台目录作为兜底源，常用源都连不上时自动顺延。</p></div>
+      <div class="glass feature"><div class="ic">📑</div><h3 data-i18n="f4_t">多种订阅源格式</h3><p data-i18n="f4_d">M3U / M3U8 / PLS / ASX / XSPF / JSON / 纯文本，拖进来自动识别。</p></div>
+      <div class="glass feature"><div class="ic">🔗</div><h3 data-i18n="f5_t">防盗链支持</h3><p data-i18n="f5_d">自动识别 #EXTVLCOPT:http-referrer / #KODIPROP，代理时带上 Referer。</p></div>
+      <div class="glass feature"><div class="ic">📻</div><h3 data-i18n="f6_t">每日同步 FM 电台</h3><p data-i18n="f6_d">自动抓取并合并约 600 个国内电台，同步后自动体检，失效自动替换。</p></div>
+      <div class="glass feature"><div class="ic">🌐</div><h3 data-i18n="f7_t">双语界面</h3><p data-i18n="f7_d">简体中文 / English 完整本地化，右上角一键切换并记忆。</p></div>
+      <div class="glass feature"><div class="ic">💾</div><h3 data-i18n="f8_t">数据持久化</h3><p data-i18n="f8_d">收藏与订阅源持久化到 /data，容器重建不丢；零第三方 npm 依赖，构建几十秒。</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2 class="sec-title" data-i18n="why_title">为什么它能播，而很多同类播不出</h2>
+    <p class="sec-sub" data-i18n="why_sub">浏览器比本地播放器严格得多，三个常见坑本项目都填平了</p>
+    <div class="glass why">
+      <table>
+        <thead><tr><th data-i18n="why_th1">问题</th><th data-i18n="why_th2">表现</th><th data-i18n="why_th3">本项目做法</th></tr></thead>
+        <tbody>
+          <tr><td data-i18n="why_r1_1">原生 &lt;audio&gt; 不支持 HLS</td><td class="problem" data-i18n="why_r1_2">.m3u8 点了没反应 / 一直转圈</td><td class="fix" data-i18n="why_r1_3">内置 vendored hls.js，自动识别走 HLS 分支</td></tr>
+          <tr><td data-i18n="why_r2_1">跨域（CORS）</td><td class="problem" data-i18n="why_r2_2">控制台一片 Access-Control-Allow-Origin 报错</td><td class="fix" data-i18n="why_r2_3">服务端代理，所有请求同源，浏览器从不直连</td></tr>
+          <tr><td data-i18n="why_r3_1">master m3u8 跳 CDN + token</td><td class="problem" data-i18n="why_r3_2">四川 / CNR 这类源播到一半断</td><td class="fix" data-i18n="why_r3_3">服务端重写整个 m3u8，自行跟随 301/302 重定向</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="deploy">
+  <div class="wrap">
+    <h2 class="sec-title" data-i18n="dep_title">快速部署（飞牛 NAS / 任意 Docker 主机）</h2>
+    <p class="sec-sub" data-i18n="dep_sub">复制下面内容存为 docker-compose.yml，一条命令即可运行</p>
+    <div class="glass code">
+<pre><span class="c"># docker-compose.yml</span>
+services:
+  jiexiang-radio:
+    image: ghcr.io/haonanren118/jiexiang-radio:latest
+    container_name: jiexiang-radio
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=Asia/Shanghai
+      - UPSTREAM_TIMEOUT=15000</pre>
+    </div>
+    <div class="glass code" style="margin-top:16px">
+<pre><span class="c"># 启动后浏览器打开</span>
+docker compose up -d
+<span class="c"># → http://&lt;你的主机IP&gt;:8081</span></pre>
+    </div>
+    <p class="sec-sub" style="margin-top:22px" data-i18n="dep_note">本项目需在自有 Docker 主机（如飞牛 NAS）部署后访问，暂无公共演示站点。本地构建零第三方依赖，几十秒完成。</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2 class="sec-title" data-i18n="steps_title">三步开始</h2>
+    <div class="steps">
+      <div class="glass step"><div class="n">1</div><h3 data-i18n="s1_t">克隆仓库</h3><p data-i18n="s1_d">git clone 项目到你的 Docker 主机。</p></div>
+      <div class="glass step"><div class="n">2</div><h3 data-i18n="s2_t">docker compose up</h3><p data-i18n="s2_d">一条命令拉起容器，端口 8081。</p></div>
+      <div class="glass step"><div class="n">3</div><h3 data-i18n="s3_t">搜索 / 订阅</h3><p data-i18n="s3_d">全球电台搜索、导入订阅源，开始收听。</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <div>© <span id="year"></span> jiexiang-radio · <span data-i18n="license">MIT License</span></div>
+    <div class="foot-links">
+      <a href="https://github.com/haonanren118/jiexiang-radio" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://gitee.com/yygitee118/jiexiang-radio" target="_blank" rel="noopener">Gitee</a>
+      <a href="https://github.com/haonanren118/jiexiang-radio#readme" target="_blank" rel="noopener" data-i18n="nav_docs2">文档</a>
+      <a href="https://shang.qq.com/wpa/qunwpa?id=708144970" target="_blank" rel="noopener">QQ 708144970</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  var I18N = {
+    "zh-CN": {
+      brand:"杰翔电台", badge:"Docker 一键部署 · 真正能播的网络电台",
+      title:"能真正播放的网络电台",
+      sub:"单个容器搞定。内置 HLS 播放、跨域服务端代理、全球电台搜索与多种订阅源格式，简体中文 / English 双语界面。把「浏览器播不出声」这件事彻底解决。",
+      cta_github:"在 GitHub 查看", cta_deploy:"🚀 一键部署", cta_qq:"💬 加入 QQ 群 708144970",
+      nav_docs:"文档", nav_docs2:"文档",
+      feat_title:"核心特性", feat_sub:"不只是个播放器，是把「能播」做到极致的一整套方案",
+      f1_t:"真的能播", f1_d:"内置 hls.js，自动识别 HLS；服务端代理重写 m3u8，解决 CDN 跳转 + token 播到一半断的问题。",
+      f2_t:"全球电台搜索", f2_d:"基于 radio-browser 的全球电台库，多镜像自动容灾切换，搜到即用。",
+      f3_t:"RadioDroid 备用源", f3_d:"内置上万条全球电台目录作为兜底源，常用源都连不上时自动顺延。",
+      f4_t:"多种订阅源格式", f4_d:"M3U / M3U8 / PLS / ASX / XSPF / JSON / 纯文本，拖进来自动识别。",
+      f5_t:"防盗链支持", f5_d:"自动识别 #EXTVLCOPT:http-referrer / #KODIPROP，代理时带上 Referer。",
+      f6_t:"每日同步 FM 电台", f6_d:"自动抓取并合并约 600 个国内电台，同步后自动体检，失效自动替换。",
+      f7_t:"双语界面", f7_d:"简体中文 / English 完整本地化，右上角一键切换并记忆。",
+      f8_t:"数据持久化", f8_d:"收藏与订阅源持久化到 /data，容器重建不丢；零第三方 npm 依赖，构建几十秒。",
+      why_title:"为什么它能播，而很多同类播不出", why_sub:"浏览器比本地播放器严格得多，三个常见坑本项目都填平了",
+      why_th1:"问题", why_th2:"表现", why_th3:"本项目做法",
+      why_r1_1:"原生 <audio> 不支持 HLS", why_r1_2:".m3u8 点了没反应 / 一直转圈", why_r1_3:"内置 vendored hls.js，自动识别走 HLS 分支",
+      why_r2_1:"跨域（CORS）", why_r2_2:"控制台一片 Access-Control-Allow-Origin 报错", why_r2_3:"服务端代理，所有请求同源，浏览器从不直连",
+      why_r3_1:"master m3u8 跳 CDN + token", why_r3_2:"四川 / CNR 这类源播到一半断", why_r3_3:"服务端重写整个 m3u8，自行跟随 301/302 重定向",
+      dep_title:"快速部署（飞牛 NAS / 任意 Docker 主机）", dep_sub:"复制下面内容存为 docker-compose.yml，一条命令即可运行",
+      dep_note:"本项目需在自有 Docker 主机（如飞牛 NAS）部署后访问，暂无公共演示站点。本地构建零第三方依赖，几十秒完成。",
+      steps_title:"三步开始",
+      s1_t:"克隆仓库", s1_d:"git clone 项目到你的 Docker 主机。",
+      s2_t:"docker compose up", s2_d:"一条命令拉起容器，端口 8081。",
+      s3_t:"搜索 / 订阅", s3_d:"全球电台搜索、导入订阅源，开始收听。",
+      license:"MIT License"
+    },
+    "en": {
+      brand:"jiexiang-radio", badge:"Docker one-click deploy · A web radio that actually plays",
+      title:"A Web Radio That Actually Plays",
+      sub:"One container does it all. Built-in HLS playback, server-side CORS proxy, global radio search and multi-format subscriptions, with a full Simplified-Chinese / English bilingual UI. No more silent browser playback.",
+      cta_github:"View on GitHub", cta_deploy:"🚀 Deploy", cta_qq:"💬 Join QQ Group 708144970",
+      nav_docs:"Docs", nav_docs2:"Docs",
+      feat_title:"Key Features", feat_sub:"Not just a player — a complete solution built around reliability",
+      f1_t:"It really plays", f1_d:"Bundled hls.js auto-detects HLS; the server proxy rewrites m3u8 to survive CDN redirects + tokens.",
+      f2_t:"Global radio search", f2_d:"Backed by radio-browser's worldwide directory with automatic mirror failover.",
+      f3_t:"RadioDroid fallback", f3_d:"Thousands of global stations bundled as a fallback pool, used when your usual sources fail.",
+      f4_t:"Many playlist formats", f4_d:"M3U / M3U8 / PLS / ASX / XSPF / JSON / plain text — drop in and it's recognized.",
+      f5_t:"Anti-hotlink support", f5_d:"Detects #EXTVLCOPT:http-referrer / #KODIPROP and forwards the Referer via proxy.",
+      f6_t:"Daily FM sync", f6_d:"Auto-fetches ~600 CN stations daily and health-checks, swapping dead ones automatically.",
+      f7_t:"Bilingual UI", f7_d:"Full Simplified-Chinese / English localization, toggle in the top-right and remembered.",
+      f8_t:"Data persistence", f8_d:"Favorites & sources persist to /data across rebuilds; zero third-party npm deps, builds in seconds.",
+      why_title:"Why it plays when others don't", why_sub:"Browsers are stricter than local players — three common pitfalls, all solved",
+      why_th1:"Problem", why_th2:"Symptom", why_th3:"Our approach",
+      why_r1_1:"Native <audio> lacks HLS", why_r1_2:".m3u8 does nothing / endless spinner", why_r1_3:"Bundled vendored hls.js takes the HLS path",
+      why_r2_1:"Cross-origin (CORS)", why_r2_2:"Console full of Access-Control-Allow-Origin errors", why_r2_3:"Server-side proxy: same-origin only, browser never hits externals",
+      why_r3_1:"master m3u8 jumps CDN + token", why_r3_2:"Sichuan / CNR streams cut off mid-play", why_r3_3:"Server rewrites the whole m3u8, following 301/302 itself",
+      dep_title:"Quick Deploy (fnOS NAS / any Docker host)", dep_sub:"Save the snippet below as docker-compose.yml and run one command",
+      dep_note:"Run it on your own Docker host (e.g. fnOS NAS); there is no public demo site. Local build has zero third-party deps and finishes in seconds.",
+      steps_title:"Get started in 3 steps",
+      s1_t:"Clone", s1_d:"git clone the repo onto your Docker host.",
+      s2_t:"docker compose up", s2_d:"One command brings up the container on port 8081.",
+      s3_t:"Search / Subscribe", s3_d:"Search global radios, import sources, and start listening.",
+      license:"MIT License"
+    }
+  };
+  function applyLang(lang){
+    document.documentElement.lang = (lang === "en") ? "en" : "zh-CN";
+    var dict = I18N[lang] || I18N["zh-CN"];
+    document.querySelectorAll("[data-i18n]").forEach(function(el){
+      var key = el.getAttribute("data-i18n");
+      if (dict[key] !== undefined) el.innerHTML = dict[key];
+    });
+    document.getElementById("langBtn").textContent = (lang === "en") ? "🌐 中文" : "🌐 EN";
+    try { localStorage.setItem("jxr_lang", lang); } catch(e){}
+  }
+  document.getElementById("langBtn").addEventListener("click", function(){
+    var cur = (document.documentElement.lang === "en") ? "en" : "zh-CN";
+    applyLang(cur === "en" ? "zh-CN" : "en");
+  });
+  (function(){
+    var url = new URLSearchParams(location.search).get("lang");
+    var saved = null;
+    try { saved = localStorage.getItem("jxr_lang"); } catch(e){}
+    var lang = (url === "en" || url === "zh-CN") ? url : (saved || (navigator.language || "zh-CN").toLowerCase().indexOf("zh") >= 0 ? "zh-CN" : "en");
+    applyLang(lang);
+    document.getElementById("year").textContent = new Date().getFullYear();
+  })();
+</script>
+</body>
+</html>
