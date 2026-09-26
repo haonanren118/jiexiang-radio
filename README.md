@@ -181,7 +181,7 @@ jiexiang-radio/
 
 - **QQ 交流群：708144970**
   - 在 QQ 中搜索群号 `708144970` 即可加入；
-  - 或点击网页加群链接：<https://shang.qq.com/wpa/qunwpa?id=708144970>
+  - 或点击网页加群链接：<https://qm.qq.com/cgi-bin/qm/qr?k=dEBGYbmu1lIRp7bAgHFim0W1uDsYl9v5&jump_from=webapi&authKey=fmTG96MhfqDQ5KARA/OvnuWAigCAloClvYhtSiEQd0jQneXmGons54BwlAh1+bUi>
 
 ---
 
