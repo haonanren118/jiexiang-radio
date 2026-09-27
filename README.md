@@ -91,7 +91,7 @@ docker run -d --name jiexiang-radio --restart=unless-stopped \
 
 > **零第三方 npm 依赖**，`hls.js` 已内置在 `public/vendor/`，构建不需要联网 `npm install`，几十秒完成。
 
-> **拉取失败？** 若 `git clone` 报 `schannel: server closed abruptly (missing close_notify)`（Windows 上用 https 拉 GitHub 常见），任选其一解决：① 改用上面的 **Gitee 镜像**地址；② 执行 `git config --global http.sslBackend openssl` 后重试；③ 配好 SSH key 后用 `git clone git@github.com:haonanren118/jiexiang-radio.git`。
+> **拉取失败？** 若 `git clone` 报 `schannel: server closed abruptly (missing close_notify)`（Windows 上用 https 拉 GitHub 常见），任选其一解决：① 改用上面的 **Gitee 镜像**地址；② 执行 `git config --global http.sslBackend openssl` 后重试。
 
 ---
 
