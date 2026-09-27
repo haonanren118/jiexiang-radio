@@ -3,6 +3,14 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#2f6fed" />
+<meta name="theme-color" content="#0e1013" media="(prefers-color-scheme: dark)" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="杰翔电台" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
 <title>杰翔电台 · jiexiang-radio</title>
 <link rel="stylesheet" href="/style.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>" />
@@ -30,7 +38,7 @@
   </nav>
 
   <div class="topright">
-    <button class="icon-btn" data-tab="search" data-i18n-title="top.search" title="搜索电台">🔍</button>
+    <button class="icon-btn" data-tab="search" data-i18n-title="top.search" title="搜索电台"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.6-3.6"/></svg></button>
     <div class="lang" id="lang-wrap">
       <button type="button" class="lang-btn" id="btn-lang" aria-haspopup="menu" aria-expanded="false" data-i18n-title="top.lang" title="切换语言">
         <span id="lang-label">🌐 中文</span><span class="caret">▾</span>
@@ -61,7 +69,7 @@
         <span id="hero-sub" data-i18n="hero.randomSub">探索新电台</span>
       </button>
       <button class="hero-card" data-tab="search">
-        <span class="hicon c-teal">🔍</span>
+        <span class="hicon c-teal"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.6-3.6"/></svg></span>
         <strong data-i18n="hero.search">搜索</strong>
         <span data-i18n="hero.searchSub">找到喜欢的</span>
       </button>
@@ -313,6 +321,43 @@
       </div>
       <div id="src-list-full" class="list"></div>
       <div class="empty" id="src-empty" data-i18n="sources.empty" hidden>还没有订阅源。</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h3 data-i18n="sched.title">⏰ 定时任务</h3>
+      </div>
+      <p class="hint" data-i18n="sched.hint">到点自动停止 / 恢复播放（页面需保持打开）。</p>
+
+      <div class="sched-row">
+        <label class="switch">
+          <input type="checkbox" id="sched-on-enabled" />
+          <span class="slider"></span>
+        </label>
+        <div class="sched-info">
+          <div class="sched-name" data-i18n="sched.on">定时开机（恢复播放）</div>
+          <div class="sched-controls">
+            <input type="time" id="sched-on-time" />
+            <select id="sched-on-station" class="sched-sel"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="sched-row">
+        <label class="switch">
+          <input type="checkbox" id="sched-off-enabled" />
+          <span class="slider"></span>
+        </label>
+        <div class="sched-info">
+          <div class="sched-name" data-i18n="sched.off">定时关机（停止播放）</div>
+          <input type="time" id="sched-off-time" />
+        </div>
+      </div>
+
+      <div class="formfoot">
+        <button type="button" class="ghost" id="btn-sched-save" data-i18n="btn.save">保存</button>
+        <span class="sched-status" id="sched-status"></span>
+      </div>
     </section>
   </section>
 

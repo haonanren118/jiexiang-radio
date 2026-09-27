@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const DATA_FILE = path.join(DATA_DIR, 'sources.json');
+const SCHEDULE_FILE = path.join(DATA_DIR, 'schedule.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPSTREAM_TIMEOUT = parseInt(process.env.UPSTREAM_TIMEOUT || '15000', 10);
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -2835,7 +2836,8 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
-  '.map': 'application/json; charset=utf-8'
+  '.map': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json'
 };
 
 function serveStatic(req, res, pathname) {
@@ -3165,6 +3167,31 @@ const server = http.createServer(async (req, res) => {
       for (const s of targets) await loadSource(s);
       saveDB();
       return sendJSON(res, { sources: db.sources, stations: clientStations() });
+    }
+
+    /* ---------- 定时播放/停止配置（前端驱动执行，后端仅持久化） ---------- */
+    if (p === '/api/schedule') {
+      const def = { powerOn: { enabled: false, t: '' }, powerOff: { enabled: false, t: '' } };
+      if (req.method === 'GET') {
+        try { return sendJSON(res, Object.assign(def, JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8')))); }
+        catch (e) { return sendJSON(res, def); }
+      }
+      if (req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        const isTime = (v) => typeof v === 'string' && /^([01]?\d|2[0-3]):[0-5]\d$/.test(v);
+        const out = {
+          powerOn: {
+            enabled: !!(body.powerOn && body.powerOn.enabled),
+            t: isTime(body.powerOn && body.powerOn.t) ? body.powerOn.t : ''
+          },
+          powerOff: {
+            enabled: !!(body.powerOff && body.powerOff.enabled),
+            t: isTime(body.powerOff && body.powerOff.t) ? body.powerOff.t : ''
+          }
+        };
+        try { fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(out, null, 2)); } catch (e) { /* ignore */ }
+        return sendJSON(res, out);
+      }
     }
 
     /* ---------- 单个电台 ---------- */

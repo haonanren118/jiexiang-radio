@@ -66,6 +66,8 @@
     var el = $('toast');
     el.textContent = msg;
     el.className = 'toast show' + (bad ? ' bad' : '');
+    el.style.cursor = '';
+    el.onclick = null;
     el.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { el.className = 'toast'; el.hidden = true; }, bad ? 4000 : 2200);
@@ -376,8 +378,8 @@
       '<button data-act="play" class="play-btn" title="' + esc(t('title.play')) + '">' + ico('play') + '</button>' +
       '</div>');
     if (fav) el.querySelector('[data-act="fav"]').classList.add('on');
-    el.querySelector('[data-act="play"]').onclick = function (e) { e.stopPropagation(); play(st); };
-    head.onclick = function () { play(st); };
+    el.querySelector('[data-act="play"]').onclick = function (e) { e.stopPropagation(); saveLastStation(st); play(st); };
+    head.onclick = function () { saveLastStation(st); play(st); };
     var fb = el.querySelector('[data-act="fav"]');
     if (fb) fb.onclick = function (e) {
       e.stopPropagation();
@@ -936,6 +938,7 @@
           setNowPlaying(st);
           setSubStatus('play.playingChain', true, stepName);
           setPlaying(true);
+          saveLastStation(st);   // 供「定时开机」恢复
           refreshCurrentViews();
         }).catch(function (e) {
           if (myToken !== playToken) return;
@@ -1287,6 +1290,14 @@
     $('btn-rb-more').addEventListener('click', doRbBrowse);
 
     $('btn-play').addEventListener('click', toggle);
+    var schedSave = $('btn-sched-save');
+    if (schedSave) schedSave.addEventListener('click', function () { saveSchedule(false); });
+    // 开关/时间即时生效：取消“定时关机”后正在播放的电台必须继续播放，
+    // 所以一取消就立即更新内存中的 schedule（并静默落库），调度器不会再停止播放。
+    ['sched-on-enabled', 'sched-off-enabled', 'sched-on-time', 'sched-off-time', 'sched-on-station'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.addEventListener('change', function () { saveSchedule(true); });
+    });
     $('vol').addEventListener('input', function () {
       var v = parseInt(this.value, 10) / 100;
       ensureAudio().volume = v;
@@ -1496,6 +1507,202 @@
   }
 
   /* ---------------------------------------------------------------- *
+   * 定时播放 / 停止（前端驱动：页面保持打开时到点自动执行）
+   * ---------------------------------------------------------------- */
+  function saveLastStation(st) {
+    try {
+      localStorage.setItem('jxr-last-station', JSON.stringify({
+        id: st.id, name: st.name, url: st.url, referer: st.referer
+      }));
+    } catch (e) { /* ignore */ }
+  }
+
+  var schedule = { powerOn: { enabled: false, t: '', stationId: '' }, powerOff: { enabled: false, t: '' } };
+  var firedToday = { off: '', on: '' };
+  var lastSchedCheck = Date.now();
+
+  function dateKey() {
+    var d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+
+  /** 把 "HH:MM" 转成今天 0 点起的毫秒时间戳（非法返回 0） */
+  function targetTs(hhmm) {
+    if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return 0;
+    var p = hhmm.split(':'), d = new Date();
+    d.setHours(+p[0], +p[1], 0, 0);
+    return d.getTime();
+  }
+
+  /** 从服务端加载配置；失败则回退本地缓存 */
+  function loadSchedule() {
+    api('/api/schedule').then(function (j) {
+      if (j && (j.powerOn || j.powerOff)) {
+        schedule = {
+          powerOn: j.powerOn || { enabled: false, t: '' },
+          powerOff: j.powerOff || { enabled: false, t: '' }
+        };
+      }
+      try { localStorage.setItem('jxr-schedule', JSON.stringify(schedule)); } catch (e) {}
+      applyScheduleUI();
+    }).catch(function () {
+      try { schedule = JSON.parse(localStorage.getItem('jxr-schedule')) || schedule; } catch (e) {}
+      applyScheduleUI();
+    });
+  }
+
+  /** 把当前 schedule 回填到设置页控件 */
+  function applyScheduleUI() {
+    var on = $('sched-on-enabled'), onT = $('sched-on-time'), onS = $('sched-on-station');
+    var off = $('sched-off-enabled'), offT = $('sched-off-time');
+    if (on) on.checked = !!schedule.powerOn.enabled;
+    if (onT) onT.value = schedule.powerOn.t || '';
+    if (onS) onS.value = schedule.powerOn.stationId || '';
+    if (off) off.checked = !!schedule.powerOff.enabled;
+    if (offT) offT.value = schedule.powerOff.t || '';
+  }
+
+  /** 用已加载的订阅源电台填充「定时开机」的电台下拉（首项=前次收听） */
+  function populateSchedStations() {
+    var sel = $('sched-on-station');
+    if (!sel) return;
+    var cur = sel.value;
+    sel.innerHTML = '';
+    var opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = t('sched.lastListened');
+    sel.appendChild(opt0);
+    var list = state.stations || [];
+    list.slice(0, 300).forEach(function (s) {
+      if (!s || !s.name) return;
+      var o = document.createElement('option');
+      o.value = (s.id != null) ? String(s.id) : '';
+      o.textContent = s.name + (s.group ? ' · ' + s.group : '');
+      sel.appendChild(o);
+    });
+    // 保持当前选择（即便是之前指定过的 id）
+    try { sel.value = cur; } catch (e) {}
+  }
+
+  /** 保存：写本地缓存 + 提交服务端。silent=true 时不弹“已保存”提示（用于开关即时生效） */
+  function saveSchedule(silent) {
+    var on = $('sched-on-enabled'), onT = $('sched-on-time'), onS = $('sched-on-station');
+    var off = $('sched-off-enabled'), offT = $('sched-off-time');
+    schedule = {
+      powerOn: { enabled: !!(on && on.checked), t: onT ? onT.value : '', stationId: onS ? onS.value : '' },
+      powerOff: { enabled: !!(off && off.checked), t: offT ? offT.value : '' }
+    };
+    try { localStorage.setItem('jxr-schedule', JSON.stringify(schedule)); } catch (e) {}
+
+    var stEl = $('sched-status');
+    // 仅把最新意图落库；不要回写 schedule = j。开关/时间即时生效时可能连续触发多次保存，
+    // 若用旧响应覆盖内存里的 schedule，会把刚设好的关机时间清成空串，导致定时关机永不触发。
+    api('/api/schedule', 'POST', schedule).then(function () {
+      if (!silent && stEl) { stEl.textContent = t('sched.saved'); setTimeout(function () { stEl.textContent = ''; }, 2000); }
+    }).catch(function () {
+      if (!silent && stEl) { stEl.textContent = t('sched.saved') + ' (local)'; setTimeout(function () { stEl.textContent = ''; }, 2000); }
+    });
+  }
+
+  /** 解析「定时开机」要播放的电台：优先指定台 > 前次收听 > 列表第一个台 */
+  function resolvePowerOnStation() {
+    // 1) 用户在设置里明确指定的台
+    if (schedule.powerOn.stationId) {
+      var byId = stationIndex()[schedule.powerOn.stationId];
+      if (byId && byId.url) return byId;
+    }
+    // 2) 前次收听记录
+    try {
+      var raw = JSON.parse(localStorage.getItem('jxr-last-station'));
+      if (raw && raw.url) {
+        var h = hydrate(raw);
+        if (h && h.url) return h;
+        if (raw.url) return raw;
+      }
+    } catch (e) {}
+    // 3) 兜底：列表第一个台
+    var list = state.stations || [];
+    if (list.length) {
+      var f = list[0];
+      if (f && f.url) return f;
+    }
+    return null;
+  }
+
+  /** 触发定时开机播放；若被浏览器自动播放策略拦截，给出可点击提示 */
+  function doPowerOn() {
+    firedToday.on = dateKey();
+    var st = resolvePowerOnStation();
+    if (!st || !st.url) {
+      toast(t('sched.on') + ' — ' + t('sched.noTime'));
+      return;
+    }
+    toast(t('sched.on') + ' ✓');
+    play(st);
+    // 自动播放可能被浏览器拦截（无近期手势）：2.5s 后检测是否真的播起来了，没播就给出可点击提示
+    setTimeout(function () {
+      if (!playing) showTapToPlay(st);
+    }, 2500);
+  }
+
+  /** 播放被自动播放策略拦截时，把提示变成可点击，点击即在本手势内重新播放 */
+  function showTapToPlay(st) {
+    var el = $('toast');
+    if (!el) { play(st); return; }
+    clearTimeout(toastTimer);
+    el.textContent = t('sched.tapToPlay');
+    el.className = 'toast show tappable';
+    el.hidden = false;
+    el.style.cursor = 'pointer';
+    el.onclick = function () {
+      el.onclick = null; el.className = 'toast'; el.style.cursor = '';
+      play(st);   // 这次发生在用户手势内，自动播放限制解除
+      setTimeout(function () {
+        if (!playing) { el.className = 'toast'; el.hidden = true; toast(t('play.cantPlay', st.name), true); }
+      }, 2500);
+    };
+  }
+
+  /** 启动定时器：每 15s 检查一次，用「跨过目标时刻」判定，绝不漏触发 */
+  function startScheduler() {
+    function check() {
+      var now = new Date();
+      var nowTs = now.getTime();
+      var today = dateKey();
+
+      // 定时关机：到点停止播放
+      if (schedule.powerOff.enabled && firedToday.off !== today && playing) {
+        var offTs = targetTs(schedule.powerOff.t);
+        if (offTs && lastSchedCheck < offTs && offTs <= nowTs) {
+          stopAll();
+          firedToday.off = today;
+          toast(t('sched.off') + ' ✓');
+        }
+      }
+      // 定时开机：到点恢复播放
+      if (schedule.powerOn.enabled && firedToday.on !== today && !playing) {
+        var onTs = targetTs(schedule.powerOn.t);
+        if (onTs) {
+          // 情况 A：页面一直开着，刚好跨过设定时刻
+          // 情况 B：页面在本时刻之后才打开/回到前台（手机熄屏节流），宽限到当天结束前都补触发
+          var passedWhileOpen = lastSchedCheck < onTs && onTs <= nowTs;
+          var missedAndReturn = lastSchedCheck >= onTs && nowTs - onTs < 12 * 3600 * 1000;
+          if (passedWhileOpen || missedAndReturn) {
+            doPowerOn();
+          }
+        }
+      }
+      lastSchedCheck = nowTs;
+    }
+    check();
+    setInterval(check, 15000);
+    // 手机熄屏/切后台后 setInterval 会被节流，回到前台时补检查一次
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') check();
+    });
+  }
+
+  /* ---------------------------------------------------------------- *
    * 启动
    * ---------------------------------------------------------------- */
   function boot() {
@@ -1511,10 +1718,13 @@
     setNowPlaying(null);
     setSubStatus('player.hint', false);
     go('home');
+    loadSchedule();
+    startScheduler();
 
     api('/api/sources').then(function (j) {
       state.sources = j.sources || [];
       state.stations = j.stations || [];
+      populateSchedStations();   // 电台列表就绪后填充「定时开机」下拉
       /* 渲染异常单独兜住：接口成功了就不该报「后端连接失败」，
        * 否则一个前端小错会被误报成后端挂了（曾经就踩过）。 */
       try { renderAll(); } catch (err) { console.error('[renderAll]', err); }
